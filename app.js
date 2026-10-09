@@ -177,6 +177,7 @@
       if (acc === null) break;
       const sm = acc.match(/```web-search\n([\s\S]*?)```/);
       if (sm && step < 5) {
+        const rest = acc.replace(sm[0], '').trim(); if (rest) bub.innerHTML = md(rest); else bub.parentElement.remove();
         const q = sm[1].trim().split('\n')[0].slice(0, 200);
         const sc = searchCard(q);
         let items = [], err = '';

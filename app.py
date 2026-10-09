@@ -166,24 +166,24 @@ _scache: dict = {}
 
 def _do_search(q: str):
     from ddgs import DDGS
-    out = []
+    news, text = [], []
     d = DDGS()
     try:
-        for r in d.text(q, max_results=6, region="wt-wt", safesearch="moderate"):
-            out.append({"title": str(r.get("title", ""))[:140], "url": str(r.get("href", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": ""})
-    except Exception as e:
-        print("search text error:", type(e).__name__)
-    try:
-        for r in d.news(q, max_results=4, safesearch="moderate"):
-            out.append({"title": str(r.get("title", ""))[:140], "url": str(r.get("url", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": str(r.get("date", ""))[:10]})
+        for r in d.news(q, max_results=6, safesearch="moderate"):
+            news.append({"title": str(r.get("title", ""))[:140], "url": str(r.get("url", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": str(r.get("date", ""))[:10]})
     except Exception as e:
         print("search news error:", type(e).__name__)
+    try:
+        for r in d.text(q, max_results=6, region="wt-wt", safesearch="moderate"):
+            text.append({"title": str(r.get("title", ""))[:140], "url": str(r.get("href", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": ""})
+    except Exception as e:
+        print("search text error:", type(e).__name__)
     seen, res = set(), []
-    for r in out:
+    for r in news[:5] + text + news[5:]:
         if r["url"].startswith(("http://", "https://")) and r["url"] not in seen:
             seen.add(r["url"])
             res.append(r)
-    return res[:8]
+    return res[:9]
 
 
 @app.post("/api/search")
