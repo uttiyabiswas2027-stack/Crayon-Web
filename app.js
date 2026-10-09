@@ -116,9 +116,10 @@
     row.append(img, box); log.appendChild(row); stick(); return box;
   }
   function finishCard(card, res) {
-    card.classList.remove('busy'); card.classList.toggle('bad', !!res.error); card.querySelector('.st').textContent = res.error ? 'Finished with an error' : 'Done';
+    card.classList.remove('busy'); card.classList.toggle('bad', !!res.error); card.querySelector('.st').textContent = res.error ? 'First attempt failed - Crayon is fixing it' : 'Done';
     const o = card.querySelector('.out'), txt = ((res.stdout || '') + (res.error ? '\n' + res.error : '')).trim();
-    if (txt) { o.textContent = txt.slice(0, 6000); o.classList.remove('hide'); }
+    if (txt) { o.textContent = txt.slice(0, 6000); o.classList.remove('hide');
+      if (res.error) { const d = document.createElement('details'); d.className = 'tech'; const sm = document.createElement('summary'); sm.textContent = 'Technical details'; o.replaceWith(d); d.append(sm, o); } }
     const ofs = card.querySelector('.outfiles');
     (res.files || []).forEach((f) => {
       const n = safeName(f.name); store.set(n, f.data);
