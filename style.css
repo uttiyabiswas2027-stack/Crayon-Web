@@ -37,3 +37,22 @@ footer{padding:8px 16px calc(12px + env(safe-area-inset-bottom));background:line
 #send:disabled{background:#e6ddd6;cursor:default}
 .note{max-width:720px;margin:8px auto 0;text-align:center;font-size:12px;color:var(--mut)}
 .hide{display:none!important}
+
+#form{padding-left:8px}
+.icon{width:38px;height:38px;border-radius:50%;border:0;background:transparent;color:var(--mut);cursor:pointer;display:grid;place-items:center;flex:none}
+.icon:hover{background:#f3efea;color:var(--ink)}
+.files{max-width:720px;margin:0 auto 8px;display:flex;flex-wrap:wrap;gap:6px}
+.fchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 6px 4px 12px;font-size:13px}
+.fchip button{border:0;background:#f1ece7;border-radius:50%;width:20px;height:20px;cursor:pointer;line-height:1;color:var(--mut)}
+.run{border:1px solid var(--line);background:var(--card);border-radius:14px;padding:10px 12px;font-size:14px;max-width:100%;width:100%}
+.run .hd{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;color:var(--mut);margin-bottom:6px}
+.run .hd i{width:8px;height:8px;border-radius:50%;background:var(--accent);display:inline-block}
+.run.busy .hd i{animation:b 1s infinite}
+.run pre{background:#1f1a1d;color:#f6f1ec;padding:10px 12px;border-radius:10px;overflow-x:auto;margin:6px 0 0;white-space:pre-wrap;max-height:260px;font:13px ui-monospace,Menlo,Consolas,monospace}
+.run .out{white-space:pre-wrap}
+.outfiles{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:flex-start}
+.outfiles a{border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:13px;color:var(--ink);text-decoration:none;background:#fff}
+.outfiles a:hover{border-color:var(--accent)}
+.outfiles img{max-width:100%;max-height:320px;border-radius:10px;border:1px solid var(--line)}
+.lbl{font-size:12px;color:var(--mut);margin-top:6px}
+.pyrun{position:relative}

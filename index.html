@@ -30,13 +30,16 @@
   <section id="log" aria-live="polite"></section>
 </main>
 <footer>
+  <div id="files" class="files hide"></div>
   <form id="form" autocomplete="off">
-    <textarea id="input" rows="1" maxlength="4000" placeholder="Message Crayon" aria-label="Message Crayon"></textarea>
+    <button id="attach" type="button" class="icon" title="Add files" aria-label="Add files"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 01-7.8-7.8l8.6-8.6a3.7 3.7 0 015.2 5.2l-8.6 8.6a1.8 1.8 0 01-2.6-2.6l7.9-7.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <input id="fileinput" type="file" multiple hidden>
+    <textarea id="input" rows="1" maxlength="8000" placeholder="Message Crayon" aria-label="Message Crayon"></textarea>
     <button id="send" type="submit" aria-label="Send">
       <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
   </form>
-  <p class="note">Crayon is an AI and can make mistakes. Chats are not saved after you close the page.</p>
+  <p class="note">Crayon is an AI and can make mistakes. Files and code stay in your browser and are not saved after you close the page.</p>
 </footer>
 <script src="/static/app.js"></script>
 </body>
