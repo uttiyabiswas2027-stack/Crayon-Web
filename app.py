@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 import llm
 import gmail_auth
+import keystore
 
 BASE = Path(__file__).parent
 MAX_MSG = 9000
@@ -28,6 +29,8 @@ if not _S.exists():
         if (BASE / _n).exists():
             shutil.copy(BASE / _n, _S / _n)
 app.include_router(gmail_auth.router)
+app.include_router(keystore.router)
+keystore.load_into_env()
 app.mount("/static", StaticFiles(directory=_S), name="static")
 
 sessions: "OrderedDict[str, list]" = OrderedDict()
