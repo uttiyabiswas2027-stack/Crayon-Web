@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import llm
+import gmail_auth
 
 BASE = Path(__file__).parent
 MAX_MSG = 9000
@@ -26,6 +27,7 @@ if not _S.exists():
     for _n in ("index.html", "style.css", "app.js", "crayon.svg", "favicon.svg", "pyworker.js"):
         if (BASE / _n).exists():
             shutil.copy(BASE / _n, _S / _n)
+app.include_router(gmail_auth.router)
 app.mount("/static", StaticFiles(directory=_S), name="static")
 
 sessions: "OrderedDict[str, list]" = OrderedDict()
@@ -116,6 +118,11 @@ async def chat(req: Request):
 
     if active["n"] >= MAX_STREAMS:
         return JSONResponse({"error": "Crayon is busy right now. Try again in a few seconds."}, status_code=503)
+    mail_on = False
+    try:
+        mail_on = bool(body.get("mail")) and gmail_auth.current_user(req) is not None
+    except Exception:
+        mail_on = False
     hist = sessions.get(sid, [])
     sessions[sid] = hist
     sessions.move_to_end(sid)
@@ -130,7 +137,7 @@ async def chat(req: Request):
             last = None
             for nm in names:
                 try:
-                    async for ch in model(nm).astream(llm.to_messages(hist[-MAX_TURNS * 2:], text)):
+                    async for ch in model(nm).astream(llm.to_messages(hist[-MAX_TURNS * 2:], text, mail_on)):
                         tt = llm.chunk_text(ch)
                         if tt:
                             out.append(tt)

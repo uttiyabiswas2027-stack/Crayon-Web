@@ -56,3 +56,4 @@ footer{padding:8px 16px calc(12px + env(safe-area-inset-bottom));background:line
 .outfiles img{max-width:100%;max-height:320px;border-radius:10px;border:1px solid var(--line)}
 .lbl{font-size:12px;color:var(--mut);margin-top:6px}
 .pyrun{position:relative}
+.hright{display:flex;gap:8px;align-items:center}.acct{font-size:13px;color:var(--mut);max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}@media(max-width:560px){.acct{display:none}}
