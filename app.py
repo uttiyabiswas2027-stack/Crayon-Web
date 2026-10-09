@@ -36,11 +36,14 @@ day = {"d": time.strftime("%Y-%m-%d"), "n": 0}
 _model = None
 
 
-def model():
-    global _model
-    if _model is None:
-        _model = llm.build_model()
-    return _model
+_models: dict = {}
+
+
+def model(name=None):
+    key = name or "_default"
+    if key not in _models:
+        _models[key] = llm.build_model(name=name) if name else llm.build_model()
+    return _models[key]
 
 
 def client_ip(req: Request) -> str:
@@ -123,12 +126,23 @@ async def chat(req: Request):
         out = []
         active["n"] += 1
         try:
-            m = model()
-            async for ch in m.astream(llm.to_messages(hist[-MAX_TURNS * 2:], text)):
-                t = llm.chunk_text(ch)
-                if t:
-                    out.append(t)
-                    yield f"data: {json.dumps({'t': t})}\n\n"
+            names = [None] if llm.provider() != "gemini" else llm.model_names()
+            last = None
+            for nm in names:
+                try:
+                    async for ch in model(nm).astream(llm.to_messages(hist[-MAX_TURNS * 2:], text)):
+                        tt = llm.chunk_text(ch)
+                        if tt:
+                            out.append(tt)
+                            yield f"data: {json.dumps({'t': tt})}\n\n"
+                    last = None
+                    break
+                except Exception as e2:
+                    last = e2
+                    if out:
+                        break
+            if last is not None and not out:
+                raise last
             full = "".join(out).strip()
             if not full:
                 yield f"data: {json.dumps({'t': 'I got an empty answer. Try rephrasing?'})}\n\n"

@@ -25,7 +25,16 @@ def provider() -> str:
     return os.environ.get("LLM_PROVIDER", "gemini").strip().lower()
 
 
-def build_model(streaming: bool = True):
+def model_names():
+    raw = os.environ.get("GEMINI_MODELS") or os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+    names = [x.strip() for x in raw.split(",") if x.strip()]
+    for extra in ("gemini-3.5-flash-lite", "gemini-flash-lite-latest"):
+        if extra not in names:
+            names.append(extra)
+    return names
+
+
+def build_model(streaming: bool = True, name: str | None = None):
     p = provider()
     if p == "openrouter":
         from langchain_openai import ChatOpenAI
@@ -46,7 +55,7 @@ def build_model(streaming: bool = True):
     if not key:
         raise RuntimeError("GEMINI_API_KEY missing")
     return ChatGoogleGenerativeAI(
-        model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+        model=name or model_names()[0],
         google_api_key=key,
         temperature=0.6,
         timeout=60,
