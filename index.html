@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Crayon - ask me anything</title>
+<meta name="description" content="Crayon is a friendly AI assistant. Open the page and ask anything.">
+<meta property="og:title" content="Crayon">
+<meta property="og:description" content="A friendly AI assistant. Ask me anything.">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><img src="/static/crayon.svg" alt="" width="28" height="28"><span>Crayon</span></div>
+  <button id="new" class="ghost" title="Start a new chat">New chat</button>
+</header>
+<main id="scroll">
+  <section id="hero">
+    <img src="/static/crayon.svg" alt="Crayon" class="face" width="96" height="96">
+    <h1>What can I help with?</h1>
+    <p class="sub">Hi, I'm Crayon. Ask me anything.</p>
+    <div class="chips">
+      <button class="chip">Explain something simply</button>
+      <button class="chip">Help me write a message</button>
+      <button class="chip">Plan my day</button>
+      <button class="chip">Debug some code</button>
+    </div>
+  </section>
+  <section id="log" aria-live="polite"></section>
+</main>
+<footer>
+  <form id="form" autocomplete="off">
+    <textarea id="input" rows="1" maxlength="4000" placeholder="Message Crayon" aria-label="Message Crayon"></textarea>
+    <button id="send" type="submit" aria-label="Send">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+  </form>
+  <p class="note">Crayon is an AI and can make mistakes. Chats are not saved after you close the page.</p>
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
