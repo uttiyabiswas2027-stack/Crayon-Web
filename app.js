@@ -7,7 +7,7 @@
   const esc = (s) => s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function md(src) {
     let s = esc(src);
-    s = s.replace(/```([\w-]*)\n?([\s\S]*?)```/g, (_, l, c) => (l === 'python-run' ? '<div class="lbl">Code for the computer</div>' : '') + '<pre><code>' + c.replace(/\n$/, '') + '</code></pre>');
+    s = s.replace(/```([\w-]*)\n?([\s\S]*?)```/g, (_, l, c) => (l === 'web-search' ? '<div class="lbl">Searching the web</div>' : l === 'python-run' ? '<div class="lbl">Code for the computer</div>' : '') + '<pre><code>' + c.replace(/\n$/, '') + '</code></pre>');
     s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
     s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?]|$)/g, '$1<em>$2</em>');
@@ -101,6 +101,24 @@
     });
     scroll.scrollTop = scroll.scrollHeight;
   }
+  function searchCard(q) {
+    const row = document.createElement('div'); row.className = 'msg ai';
+    const img = document.createElement('img'); img.src = '/static/crayon.svg'; img.className = 'av'; img.alt = '';
+    const box = document.createElement('div'); box.className = 'run busy';
+    box.innerHTML = '<div class="hd"><i></i><span>Searching the web</span><span class="st"></span></div><div class="outfiles srcs"></div>';
+    box.querySelector('.st').textContent = q;
+    row.append(img, box); log.appendChild(row); scroll.scrollTop = scroll.scrollHeight; return box;
+  }
+  function finishSearch(card, items, err) {
+    card.classList.remove('busy');
+    const box = card.querySelector('.srcs');
+    if (!items.length) { box.textContent = err || 'No results.'; return; }
+    items.slice(0, 6).forEach((x) => {
+      let host = ''; try { const u = new URL(x.url); if (!/^https?:$/.test(u.protocol)) return; host = u.hostname.replace(/^www\./, ''); } catch (_) { return; }
+      const a = document.createElement('a'); a.href = x.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = host; a.title = x.title; box.appendChild(a);
+    });
+    scroll.scrollTop = scroll.scrollHeight;
+  }
   async function previews(names) {
     let out = '';
     for (const n of names) {
@@ -157,6 +175,20 @@
       const bub = add('ai', '<span class="dots"><span></span><span></span><span></span></span>');
       const acc = await stream(msg, bub);
       if (acc === null) break;
+      const sm = acc.match(/```web-search\n([\s\S]*?)```/);
+      if (sm && step < 5) {
+        const q = sm[1].trim().split('\n')[0].slice(0, 200);
+        const sc = searchCard(q);
+        let items = [], err = '';
+        try {
+          const r = await fetch('/api/search', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({q})});
+          const jj = await r.json().catch(() => ({}));
+          if (r.ok) items = jj.results || []; else err = jj.error || 'Search failed.';
+        } catch (_) { err = 'Search failed.'; }
+        finishSearch(sc, items, err);
+        msg = '[Search results for: ' + q + ']\n' + (items.length ? items.map((x, i) => (i + 1) + '. ' + x.title + (x.date ? ' (' + x.date + ')' : '') + '\n   ' + x.url + '\n   ' + x.snippet).join('\n') : '(no results' + (err ? ': ' + err : '') + ')');
+        continue;
+      }
       const m = acc.match(/```python-run\n([\s\S]*?)```/);
       if (!m || step === 5) break;
       const card = runCard();

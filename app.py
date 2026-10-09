@@ -161,6 +161,58 @@ async def chat(req: Request):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+_scache: dict = {}
+
+
+def _do_search(q: str):
+    from ddgs import DDGS
+    out = []
+    d = DDGS()
+    try:
+        for r in d.text(q, max_results=6, region="wt-wt", safesearch="moderate"):
+            out.append({"title": str(r.get("title", ""))[:140], "url": str(r.get("href", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": ""})
+    except Exception as e:
+        print("search text error:", type(e).__name__)
+    try:
+        for r in d.news(q, max_results=4, safesearch="moderate"):
+            out.append({"title": str(r.get("title", ""))[:140], "url": str(r.get("url", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": str(r.get("date", ""))[:10]})
+    except Exception as e:
+        print("search news error:", type(e).__name__)
+    seen, res = set(), []
+    for r in out:
+        if r["url"].startswith(("http://", "https://")) and r["url"] not in seen:
+            seen.add(r["url"])
+            res.append(r)
+    return res[:8]
+
+
+@app.post("/api/search")
+async def search(req: Request):
+    if int(req.headers.get("content-length") or 0) > 2000:
+        return JSONResponse({"error": "Request too large."}, status_code=413)
+    try:
+        q = str((await req.json()).get("q", "")).strip()[:200]
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if not q:
+        return JSONResponse({"error": "empty query"}, status_code=400)
+    msg = limited(client_ip(req))
+    if msg:
+        return JSONResponse({"error": msg}, status_code=429)
+    now = time.time()
+    hit = _scache.get(q.lower())
+    if hit and now - hit[0] < 300:
+        return {"results": hit[1]}
+    try:
+        res = await asyncio.wait_for(asyncio.to_thread(_do_search, q), timeout=15)
+    except Exception:
+        return JSONResponse({"error": "Search is unavailable right now."}, status_code=503)
+    if len(_scache) > 500:
+        _scache.clear()
+    _scache[q.lower()] = (now, res)
+    return {"results": res}
+
+
 @app.post("/api/reset")
 async def reset(req: Request):
     try:
