@@ -160,7 +160,7 @@
   }
 
   async function stream(text, bub) {
-    let acc = '', raf = 0;
+    let acc = '', raf = 0, modelTag = '';
     try {
       ctl = new AbortController();
       const r = await fetch('/api/chat', {signal: ctl.signal, method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: sid, message: text, mail: signedIn})});
@@ -176,14 +176,16 @@
           const d = line.slice(5).trim(); if (d === '[DONE]') continue;
           try {
             const j = JSON.parse(d);
-            if (j.t) { acc += j.t; if (!raf) raf = requestAnimationFrame(() => { raf = 0; bub.innerHTML = md(acc); stick(); }); }
+            if (j.m) { modelTag = j.m; } if (j.t) { acc += j.t; if (!raf) raf = requestAnimationFrame(() => { raf = 0; bub.innerHTML = md(acc); stick(); }); }
             if (j.err) { bub.parentElement.classList.add('err'); bub.textContent = j.err; return null; }
           } catch (_) {}
         }
       }
     } catch (e) { if (stopped) { return null; } bub.parentElement.classList.add('err'); bub.textContent = 'Connection problem. Please try again.'; return null; }
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
-    bub.innerHTML = md(acc); stick();
+    bub.innerHTML = md(acc);
+    if (modelTag && acc) { const t = document.createElement('div'); t.className = 'mtag'; t.textContent = 'via ' + modelTag; bub.appendChild(t); }
+    stick();
     return acc;
   }
 

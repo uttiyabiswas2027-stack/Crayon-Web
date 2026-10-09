@@ -108,3 +108,42 @@ def chunk_text(chunk) -> str:
         elif isinstance(part, dict) and part.get("type") == "text":
             out.append(part.get("text", ""))
     return "".join(out)
+
+
+# ---- model router (free models only by default) ----
+import re as _re
+
+CODE_HINT = _re.compile(r"\b(code|python|javascript|script|function|bug|debug|error|regex|sql|algorithm|api|class|compile|stack ?trace|"
+                        r"calculate|math|equation|prove|proof|derive|optimi[sz]e|solve|integral|probability|big-?o|refactor)\b|\[Computer output\]", _re.I)
+
+
+def or_key() -> str:
+    return os.environ.get("OPENROUTER_API_KEY", "").strip()
+
+
+def code_models():
+    # DeepSeek is paid on OpenRouter; only used if CRAYON_DEEPSEEK_MODEL is set explicitly.
+    ds = os.environ.get("CRAYON_DEEPSEEK_MODEL", "").strip()
+    raw = os.environ.get("CRAYON_CODE_MODELS", "nvidia/nemotron-3-ultra-550b-a55b:free,cohere/north-mini-code:free,openrouter/free")
+    names = ([ds] if ds else []) + [x.strip() for x in raw.split(",") if x.strip()]
+    return names
+
+
+def build_or(name: str):
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(model=name, api_key=or_key(), base_url="https://openrouter.ai/api/v1",
+                      streaming=True, temperature=0.4, timeout=60, max_retries=0)
+
+
+def plan(text: str):
+    """Ordered list of (kind, name, label). Gemini default; code/reasoning prefers OpenRouter; OpenRouter is the 429 backup."""
+    gem = [("gemini", n, n) for n in model_names()]
+    orm = [("or", n, n) for n in code_models()] if or_key() else []
+    if orm and CODE_HINT.search(text or ""):
+        return orm + gem
+    return gem + orm
+
+
+def label(name: str) -> str:
+    n = name.split("/")[-1].replace(":free", "")
+    return n[:40]

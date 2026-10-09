@@ -133,19 +133,25 @@ async def chat(req: Request):
         out = []
         active["n"] += 1
         try:
-            names = [None] if llm.provider() != "gemini" else llm.model_names()
+            steps = llm.plan(text) if llm.provider() == "gemini" else [("gemini", None, "default")]
             last = None
-            for nm in names:
+            for kind, nm, lab in steps:
                 try:
-                    async for ch in model(nm).astream(llm.to_messages(hist[-MAX_TURNS * 2:], text, mail_on)):
+                    mdl = llm.build_or(nm) if kind == "or" else model(nm)
+                    sent_label = False
+                    async for ch in mdl.astream(llm.to_messages(hist[-MAX_TURNS * 2:], text, mail_on)):
                         tt = llm.chunk_text(ch)
                         if tt:
+                            if not sent_label:
+                                sent_label = True
+                                yield f"data: {json.dumps({'m': llm.label(lab)})}\n\n"
                             out.append(tt)
                             yield f"data: {json.dumps({'t': tt})}\n\n"
                     last = None
                     break
                 except Exception as e2:
                     last = e2
+                    print("model fail:", kind, nm, type(e2).__name__)
                     if out:
                         break
             if last is not None and not out:
