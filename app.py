@@ -25,7 +25,7 @@ import shutil
 _S = BASE / "static"
 if not _S.exists():
     _S.mkdir()
-    for _n in ("index.html", "style.css", "app.js", "crayon.svg", "favicon.svg", "pyworker.js"):
+    for _n in ("index.html", "style.css", "app.js", "crayon.svg", "favicon.svg", "pyworker.js", "manifest.webmanifest", "sw.js", "privacy.html", "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png"):
         if (BASE / _n).exists():
             shutil.copy(BASE / _n, _S / _n)
 app.include_router(gmail_auth.router)
@@ -94,6 +94,29 @@ async def sec_headers(request: Request, call_next):
 @app.get("/")
 def index():
     return FileResponse(BASE / "static" / "index.html")
+
+
+@app.get("/sw.js")
+def sw():
+    return FileResponse(BASE / "static" / "sw.js", media_type="application/javascript", headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(BASE / "static" / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/privacy")
+def privacy():
+    return FileResponse(BASE / "static" / "privacy.html")
+
+
+@app.get("/.well-known/assetlinks.json")
+def assetlinks():
+    p = BASE / "static" / "assetlinks.json"
+    if p.exists():
+        return FileResponse(p, media_type="application/json")
+    return JSONResponse([], status_code=200)
 
 
 @app.get("/health")
