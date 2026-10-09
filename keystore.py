@@ -7,11 +7,13 @@ import gmail_auth
 
 router = APIRouter()
 _tries = {"n": 0}
+import re
+ALLOWED = {"OPENROUTER_API_KEY": re.compile(r"^sk-or-[\w-]{10,250}$"), "TELEGRAM_BOT_TOKEN": re.compile(r"^\d{6,12}:[\w-]{30,60}$")}
 PAGE = """<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Crayon setup</title>
 <body style="font:16px system-ui;max-width:420px;margin:40px auto;padding:0 16px"><h3>Crayon key setup</h3>
-<input id=k type=password placeholder="OpenRouter API key" style="width:100%;padding:10px"><br><br>
+<input id=k type=password placeholder="secret value" style="width:100%;padding:10px"><br><br>
 <button id=b style="padding:10px 16px">Save</button> <span id=m></span>
-<script>b.onclick=async()=>{const r=await fetch('/setup/key',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'crayon'},body:JSON.stringify({t:location.hash.slice(1),k:k.value})});m.textContent=r.ok?'saved':'failed';k.value=''}</script>"""
+<script>b.onclick=async()=>{const r=await fetch('/setup/key',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'crayon'},body:JSON.stringify({t:location.hash.slice(1).split('/')[0],n:location.hash.slice(1).split('/')[1]||'OPENROUTER_API_KEY',k:k.value})});m.textContent=r.ok?'saved':'failed';k.value=''}</script>"""
 
 
 def _init():
@@ -23,7 +25,7 @@ def load_into_env():
         _init()
         rows = gmail_auth.db("SELECT name, val FROM cw_secrets", (), True) or []
         for n, v in rows:
-            if n == "OPENROUTER_API_KEY" and not os.environ.get(n):
+            if n in ALLOWED and not os.environ.get(n):
                 os.environ[n] = gmail_auth._fernet().decrypt(v.encode()).decode()
     except Exception as e:
         print("keystore load:", type(e).__name__)
@@ -44,15 +46,21 @@ async def save(req: Request):
     _tries["n"] += 1
     try:
         b = await req.json()
-        t, k = str(b.get("t", "")), str(b.get("k", "")).strip()
+        t, k, nm = str(b.get("t", "")), str(b.get("k", "")).strip(), str(b.get("n", "OPENROUTER_API_KEY"))
     except Exception:
         return JSONResponse({"error": "bad"}, status_code=400)
-    if not hmac.compare_digest(t, tok) or not k.startswith("sk-or-") or len(k) > 300:
+    if not hmac.compare_digest(t, tok) or nm not in ALLOWED or not ALLOWED[nm].match(k):
         return JSONResponse({"error": "no"}, status_code=403)
     _init()
     enc = gmail_auth._fernet().encrypt(k.encode()).decode()
-    gmail_auth.db("DELETE FROM cw_secrets WHERE name=%s", ("OPENROUTER_API_KEY",))
-    gmail_auth.db("INSERT INTO cw_secrets (name, val) VALUES (%s, %s)", ("OPENROUTER_API_KEY", enc))
-    os.environ["OPENROUTER_API_KEY"] = k
+    gmail_auth.db("DELETE FROM cw_secrets WHERE name=%s", (nm,))
+    gmail_auth.db("INSERT INTO cw_secrets (name, val) VALUES (%s, %s)", (nm, enc))
+    os.environ[nm] = k
+    if nm == "TELEGRAM_BOT_TOKEN":
+        try:
+            import telegram_bot
+            telegram_bot.register()
+        except Exception as e:
+            print("tg register:", type(e).__name__)
     os.environ.pop("SETUP_TOKEN", None)
     return {"ok": True}

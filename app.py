@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 import llm
 import gmail_auth
 import keystore
+import telegram_bot
 
 BASE = Path(__file__).parent
 MAX_MSG = 9000
@@ -30,7 +31,10 @@ if not _S.exists():
             shutil.copy(BASE / _n, _S / _n)
 app.include_router(gmail_auth.router)
 app.include_router(keystore.router)
+app.include_router(telegram_bot.router)
 keystore.load_into_env()
+import threading
+threading.Thread(target=lambda: telegram_bot.register() if telegram_bot.token() else None, daemon=True).start()
 app.mount("/static", StaticFiles(directory=_S), name="static")
 
 sessions: "OrderedDict[str, list]" = OrderedDict()
