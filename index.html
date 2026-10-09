@@ -17,14 +17,15 @@
 </header>
 <main id="scroll">
   <section id="hero">
-    <img src="/static/crayon.svg" alt="Crayon" class="face" width="96" height="96">
-    <h1>What can I help with?</h1>
-    <p class="sub">Hi, I'm Crayon. Ask me anything.</p>
-    <div class="chips">
-      <button class="chip">Explain something simply</button>
-      <button class="chip">Help me write a message</button>
-      <button class="chip">Plan my day</button>
-      <button class="chip">Debug some code</button>
+    <img src="/static/crayon.svg" alt="Crayon" class="face" width="88" height="88">
+    <h1>What can I do for you?</h1>
+    <p class="sub">Crayon searches the web, runs code, reads your files and makes things for you.</p>
+    <div class="cards">
+      <button class="card" data-prompt="Search the web and give me a short briefing on the biggest AI news this week, with sources."><span class="ci">&#128269;</span><b>Research</b><small>Live web search with sources</small></button>
+      <button class="card" data-act="attach"><span class="ci">&#128206;</span><b>Analyze a file</b><small>Upload a CSV, doc or data</small></button>
+      <button class="card" data-prompt="Make a bar chart of the 5 most populous countries and give me the PNG and a CSV."><span class="ci">&#128202;</span><b>Make a chart</b><small>Code runs right here</small></button>
+      <button class="card" data-prompt="Write and run Python that finds the first 20 prime numbers and explain it briefly."><span class="ci">&#9889;</span><b>Write &amp; run code</b><small>Python in a sandbox</small></button>
+      <button class="card hide" data-mail="1" data-prompt="Summarize my 5 latest unread emails and tell me which need a reply."><span class="ci">&#9993;</span><b>Check my Gmail</b><small>Sign in to connect</small></button>
     </div>
   </section>
   <section id="log" aria-live="polite"></section>
@@ -34,7 +35,7 @@
   <form id="form" autocomplete="off">
     <button id="attach" type="button" class="icon" title="Add files" aria-label="Add files"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 01-7.8-7.8l8.6-8.6a3.7 3.7 0 015.2 5.2l-8.6 8.6a1.8 1.8 0 01-2.6-2.6l7.9-7.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     <input id="fileinput" type="file" multiple hidden>
-    <textarea id="input" rows="1" maxlength="8000" placeholder="Message Crayon" aria-label="Message Crayon"></textarea>
+    <textarea id="input" rows="1" maxlength="8000" placeholder="Ask Crayon to do something..." aria-label="Message Crayon"></textarea>
     <button id="send" type="submit" aria-label="Send">
       <svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>

@@ -2,16 +2,44 @@
   const $ = (s) => document.querySelector(s);
   const log = $('#log'), input = $('#input'), send = $('#send'), hero = $('#hero'), scroll = $('#scroll');
   let sid = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)) + '';
-  let busy = false;
+  let busy = false, ctl = null, stopped = false;
 
+  let pinned = true;
+  scroll.addEventListener('scroll', () => { pinned = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120; });
+  function stick(force) { if (force || pinned) scroll.scrollTop = scroll.scrollHeight; }
   const esc = (s) => s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  function md(src) {
-    let s = esc(src);
-    s = s.replace(/```([\w-]*)\n?([\s\S]*?)```/g, (_, l, c) => (l === 'gmail' ? '<div class="lbl">Gmail request</div>' : l === 'web-search' ? '<div class="lbl">Searching the web</div>' : l === 'python-run' ? '<div class="lbl">Code for the computer</div>' : '') + '<pre><code>' + c.replace(/\n$/, '') + '</code></pre>');
+  function inline(s) {
     s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
     s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-    s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?]|$)/g, '$1<em>$2</em>');
+    s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, '$1<em>$2</em>');
+    s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    s = s.replace(/(^|[\s(>])(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
     return s;
+  }
+  function md(src) {
+    const blocks = [];
+    let s = esc(src).replace(/```([\w-]*)\n?([\s\S]*?)(```|$)/g, (_, l, c) => {
+      if (l === 'gmail' || l === 'web-search') { blocks.push(''); return '\u0000' + (blocks.length - 1) + '\u0000'; }
+      const lab = l === 'python-run' ? 'Python' : (l || 'code');
+      const n = c.replace(/\n$/, '').split('\n').length;
+      const body = '<div class="code"><div class="ch"><span>' + lab + '</span><button type="button" class="cp">Copy</button></div><pre><code>' + c.replace(/\n$/, '') + '</code></pre></div>';
+      blocks.push(l === 'python-run' || n > 8 ? '<details class="cd"><summary>' + (l === 'python-run' ? 'Code Crayon ran' : 'Show code') + ' \u00b7 ' + n + ' lines</summary>' + body + '</details>' : body);
+      return '\u0000' + (blocks.length - 1) + '\u0000';
+    });
+    const out = []; let list = null, para = [];
+    const flush = () => { if (para.length) { out.push('<p>' + inline(para.join('<br>')) + '</p>'); para = []; } };
+    const endList = () => { if (list) { out.push('</' + list + '>'); list = null; } };
+    for (const line of s.split('\n')) {
+      let m;
+      if ((m = line.match(/^\u0000(\d+)\u0000$/))) { flush(); endList(); out.push(blocks[+m[1]]); continue; }
+      if ((m = line.match(/^(#{1,4})\s+(.*)$/))) { flush(); endList(); out.push('<h' + (m[1].length + 2) + '>' + inline(m[2]) + '</h' + (m[1].length + 2) + '>'); continue; }
+      if ((m = line.match(/^\s*([-*•])\s+(.*)$/))) { flush(); if (list !== 'ul') { endList(); out.push('<ul>'); list = 'ul'; } out.push('<li>' + inline(m[2]) + '</li>'); continue; }
+      if ((m = line.match(/^\s*(\d+)[.)]\s+(.*)$/))) { flush(); if (list !== 'ol') { endList(); out.push('<ol>'); list = 'ol'; } out.push('<li>' + inline(m[2]) + '</li>'); continue; }
+      if (!line.trim()) { flush(); endList(); continue; }
+      endList(); para.push(line);
+    }
+    flush(); endList();
+    return out.join('').replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[+i]);
   }
   function add(role, html, cls) {
     const row = document.createElement('div');
@@ -23,10 +51,10 @@
     }
     const b = document.createElement('div'); b.className = 'bubble'; b.innerHTML = html;
     row.appendChild(b); log.appendChild(row);
-    scroll.scrollTop = scroll.scrollHeight;
+    stick();
     return b;
   }
-  function setBusy(v) { busy = v; send.disabled = v || (!input.value.trim() && !pending.length); }
+  function setBusy(v) { busy = v; send.classList.toggle('stop', v); send.setAttribute('aria-label', v ? 'Stop' : 'Send'); send.disabled = v ? false : (!input.value.trim() && !pending.length); }
 
   // ---- virtual computer (Python in the visitor's browser) ----
   const store = new Map();            // name -> ArrayBuffer (attached + generated files)
@@ -83,12 +111,12 @@
   function runCard() {
     const row = document.createElement('div'); row.className = 'msg ai';
     const img = document.createElement('img'); img.src = '/static/crayon.svg'; img.className = 'av'; img.alt = '';
-    const box = document.createElement('div'); box.className = 'run busy';
-    box.innerHTML = '<div class="hd"><i></i><span>Crayon\'s computer</span><span class="st">Starting...</span></div><pre class="out hide"></pre><div class="outfiles"></div>';
-    row.append(img, box); log.appendChild(row); scroll.scrollTop = scroll.scrollHeight; return box;
+    const box = document.createElement('div'); box.className = 'run busy kind-code';
+    box.innerHTML = '<div class="hd"><i></i><span>Running code</span><span class="st">Starting...</span></div><pre class="out hide"></pre><div class="outfiles"></div>';
+    row.append(img, box); log.appendChild(row); stick(); return box;
   }
   function finishCard(card, res) {
-    card.classList.remove('busy'); card.querySelector('.st').textContent = res.error ? 'Finished with an error' : 'Done';
+    card.classList.remove('busy'); card.classList.toggle('bad', !!res.error); card.querySelector('.st').textContent = res.error ? 'Finished with an error' : 'Done';
     const o = card.querySelector('.out'), txt = ((res.stdout || '') + (res.error ? '\n' + res.error : '')).trim();
     if (txt) { o.textContent = txt.slice(0, 6000); o.classList.remove('hide'); }
     const ofs = card.querySelector('.outfiles');
@@ -99,15 +127,15 @@
       if (/\.(png|jpe?g|gif|webp)$/i.test(n)) { const im = document.createElement('img'); im.src = url; im.alt = n; ofs.appendChild(im); }
       const a = document.createElement('a'); a.href = url; a.download = n; a.textContent = 'Download ' + n; ofs.appendChild(a);
     });
-    scroll.scrollTop = scroll.scrollHeight;
+    stick();
   }
   function searchCard(q) {
     const row = document.createElement('div'); row.className = 'msg ai';
     const img = document.createElement('img'); img.src = '/static/crayon.svg'; img.className = 'av'; img.alt = '';
-    const box = document.createElement('div'); box.className = 'run busy';
+    const box = document.createElement('div'); box.className = 'run busy kind-search';
     box.innerHTML = '<div class="hd"><i></i><span>Searching the web</span><span class="st"></span></div><div class="outfiles srcs"></div>';
     box.querySelector('.st').textContent = q;
-    row.append(img, box); log.appendChild(row); scroll.scrollTop = scroll.scrollHeight; return box;
+    row.append(img, box); log.appendChild(row); stick(); return box;
   }
   function finishSearch(card, items, err) {
     card.classList.remove('busy');
@@ -117,7 +145,7 @@
       let host = ''; try { const u = new URL(x.url); if (!/^https?:$/.test(u.protocol)) return; host = u.hostname.replace(/^www\./, ''); } catch (_) { return; }
       const a = document.createElement('a'); a.href = x.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = host; a.title = x.title; box.appendChild(a);
     });
-    scroll.scrollTop = scroll.scrollHeight;
+    stick();
   }
   async function previews(names) {
     let out = '';
@@ -131,9 +159,10 @@
   }
 
   async function stream(text, bub) {
-    let acc = '';
+    let acc = '', raf = 0;
     try {
-      const r = await fetch('/api/chat', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: sid, message: text, mail: signedIn})});
+      ctl = new AbortController();
+      const r = await fetch('/api/chat', {signal: ctl.signal, method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: sid, message: text, mail: signedIn})});
       if (!r.ok) { const j = await r.json().catch(() => ({})); bub.parentElement.classList.add('err'); bub.textContent = j.error || 'Something went wrong.'; return null; }
       const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
       for (;;) {
@@ -146,12 +175,14 @@
           const d = line.slice(5).trim(); if (d === '[DONE]') continue;
           try {
             const j = JSON.parse(d);
-            if (j.t) { acc += j.t; bub.innerHTML = md(acc); scroll.scrollTop = scroll.scrollHeight; }
+            if (j.t) { acc += j.t; if (!raf) raf = requestAnimationFrame(() => { raf = 0; bub.innerHTML = md(acc); stick(); }); }
             if (j.err) { bub.parentElement.classList.add('err'); bub.textContent = j.err; return null; }
           } catch (_) {}
         }
       }
-    } catch (e) { bub.parentElement.classList.add('err'); bub.textContent = 'Connection problem. Please try again.'; return null; }
+    } catch (e) { if (stopped) { return null; } bub.parentElement.classList.add('err'); bub.textContent = 'Connection problem. Please try again.'; return null; }
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    bub.innerHTML = md(acc); stick();
     return acc;
   }
 
@@ -162,6 +193,7 @@
       const me = await (await fetch('/api/me')).json();
       const b = $('#mailbtn'), a = $('#acct');
       if (!me.configured) return;
+      document.querySelectorAll('.card[data-mail]').forEach((x) => x.classList.remove('hide'));
       b.classList.remove('hide'); signedIn = !!me.signed_in;
       if (signedIn) { a.textContent = me.email; a.classList.remove('hide'); b.textContent = 'Disconnect'; b.onclick = async () => { if (!confirm('Disconnect Gmail and sign out of Crayon?')) return; await fetch('/auth/disconnect', {method: 'POST', headers: XH}); location.href = '/'; }; }
       else { b.textContent = 'Connect Gmail'; b.onclick = () => { location.href = '/auth/google/login'; }; }
@@ -176,10 +208,10 @@
   function gmailCard(txt) {
     const row = document.createElement('div'); row.className = 'msg ai';
     const img = document.createElement('img'); img.src = '/static/crayon.svg'; img.className = 'av'; img.alt = '';
-    const box = document.createElement('div'); box.className = 'run busy';
+    const box = document.createElement('div'); box.className = 'run busy kind-mail';
     box.innerHTML = '<div class="hd"><i></i><span>Gmail</span><span class="st"></span></div>';
     box.querySelector('.st').textContent = txt;
-    row.append(img, box); log.appendChild(row); scroll.scrollTop = scroll.scrollHeight; return box;
+    row.append(img, box); log.appendChild(row); stick(); return box;
   }
   async function ask(raw) {
     const typed = raw.trim();
@@ -195,12 +227,12 @@
     }
     add('user', shown);
     input.value = ''; input.style.height = 'auto';
-    setBusy(true);
+    setBusy(true); stopped = false; pinned = true; stick(true);
     let msg = text;
     for (let step = 0; step < 6; step++) {
-      const bub = add('ai', '<span class="dots"><span></span><span></span><span></span></span>');
+      const bub = add('ai', '<span class="think">Thinking</span>');
       const acc = await stream(msg, bub);
-      if (acc === null) break;
+      if (acc === null || stopped) break;
       const gm = signedIn && acc.match(/```gmail\n([\s\S]*?)```/);
       if (gm && step < 5) {
         const rest = acc.replace(gm[0], '').trim(); if (rest) bub.innerHTML = md(rest); else bub.parentElement.remove();
@@ -254,11 +286,23 @@
     setBusy(false); input.focus();
   }
 
-  $('#form').addEventListener('submit', (e) => { e.preventDefault(); ask(input.value); });
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(input.value); } });
+  function stopNow() { stopped = true; try { ctl && ctl.abort(); } catch (_) {} killWorker(); }
+  $('#form').addEventListener('submit', (e) => { e.preventDefault(); if (busy) { stopNow(); return; } ask(input.value); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) ask(input.value); } });
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 180) + 'px'; send.disabled = busy || (!input.value.trim() && !pending.length); });
-  document.querySelectorAll('.chip').forEach((c) => c.addEventListener('click', () => { input.value = c.textContent + ': '; input.focus(); input.dispatchEvent(new Event('input')); }));
+  document.querySelectorAll('.card').forEach((c) => c.addEventListener('click', () => {
+    if (busy) return;
+    if (c.dataset.act === 'attach') { fileInput.click(); return; }
+    if (c.dataset.mail && !signedIn) { location.href = '/auth/google/login'; return; }
+    ask(c.dataset.prompt || '');
+  }));
+  log.addEventListener('click', (e) => {
+    const b = e.target.closest('.cp'); if (!b) return;
+    const t = b.closest('.code').querySelector('pre').innerText;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); }).catch(() => {});
+  });
   $('#new').addEventListener('click', () => {
+    stopNow(); stopped = false;
     fetch('/api/reset', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: sid})}).catch(() => {});
     sid = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)) + '';
     killWorker(); store.clear(); pending = []; renderPending(); log.innerHTML = ''; hero.classList.remove('hide'); input.focus();
