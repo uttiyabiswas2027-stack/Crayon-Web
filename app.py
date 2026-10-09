@@ -165,25 +165,38 @@ _scache: dict = {}
 
 
 def _do_search(q: str):
+    from concurrent.futures import ThreadPoolExecutor
     from ddgs import DDGS
-    news, text = [], []
-    d = DDGS()
-    try:
-        for r in d.news(q, max_results=6, safesearch="moderate"):
-            news.append({"title": str(r.get("title", ""))[:140], "url": str(r.get("url", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": str(r.get("date", ""))[:10]})
-    except Exception as e:
-        print("search news error:", type(e).__name__)
-    try:
-        for r in d.text(q, max_results=6, region="wt-wt", safesearch="moderate"):
-            text.append({"title": str(r.get("title", ""))[:140], "url": str(r.get("href", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": ""})
-    except Exception as e:
-        print("search text error:", type(e).__name__)
+
+    def get_news():
+        for _ in range(2):
+            try:
+                return [{"title": str(r.get("title", ""))[:140], "url": str(r.get("url", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": str(r.get("date", ""))[:10]}
+                        for r in DDGS(timeout=8).news(q, max_results=6, safesearch="moderate")]
+            except Exception as e:
+                print("search news error:", type(e).__name__)
+        return None
+
+    def get_text():
+        for _ in range(2):
+            try:
+                return [{"title": str(r.get("title", ""))[:140], "url": str(r.get("href", ""))[:300], "snippet": str(r.get("body", ""))[:300], "date": ""}
+                        for r in DDGS(timeout=8).text(q, max_results=6, region="wt-wt", safesearch="moderate")]
+            except Exception as e:
+                print("search text error:", type(e).__name__)
+        return None
+
+    with ThreadPoolExecutor(2) as ex:
+        fn, ft = ex.submit(get_news), ex.submit(get_text)
+        news, text = fn.result(), ft.result()
+    ok = news is not None and text is not None
+    news, text = news or [], text or []
     seen, res = set(), []
     for r in news[:5] + text + news[5:]:
         if r["url"].startswith(("http://", "https://")) and r["url"] not in seen:
             seen.add(r["url"])
             res.append(r)
-    return res[:9]
+    return res[:9], ok
 
 
 @app.post("/api/search")
@@ -204,12 +217,13 @@ async def search(req: Request):
     if hit and now - hit[0] < 300:
         return {"results": hit[1]}
     try:
-        res = await asyncio.wait_for(asyncio.to_thread(_do_search, q), timeout=15)
+        res, ok = await asyncio.wait_for(asyncio.to_thread(_do_search, q), timeout=30)
     except Exception:
         return JSONResponse({"error": "Search is unavailable right now."}, status_code=503)
-    if len(_scache) > 500:
-        _scache.clear()
-    _scache[q.lower()] = (now, res)
+    if ok and len(res) >= 3:
+        if len(_scache) > 500:
+            _scache.clear()
+        _scache[q.lower()] = (now, res)
     return {"results": res}
 
 
