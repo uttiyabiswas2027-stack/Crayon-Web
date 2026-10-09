@@ -23,7 +23,7 @@ import shutil
 _S = BASE / "static"
 if not _S.exists():
     _S.mkdir()
-    for _n in ("index.html", "style.css", "app.js", "crayon.svg", "favicon.svg"):
+    for _n in ("index.html", "style.css", "app.js", "crayon.svg", "favicon.svg", "pyworker.js"):
         if (BASE / _n).exists():
             shutil.copy(BASE / _n, _S / _n)
 app.mount("/static", StaticFiles(directory=_S), name="static")
