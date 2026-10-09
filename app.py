@@ -234,6 +234,95 @@ async def search(req: Request):
     return {"results": res}
 
 
+import ipaddress, socket
+from urllib.parse import urlparse, urljoin
+import httpx
+
+_fcache = OrderedDict()
+
+
+def _safe_url(u: str) -> bool:
+    try:
+        p = urlparse(u)
+        if p.scheme not in ("http", "https") or not p.hostname or p.username or p.password:
+            return False
+        if p.port not in (None, 80, 443):
+            return False
+        for info in socket.getaddrinfo(p.hostname, p.port or 443, proto=socket.IPPROTO_TCP):
+            ip = ipaddress.ip_address(info[4][0])
+            if not ip.is_global:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _do_fetch(url: str):
+    import trafilatura
+    cur = url
+    with httpx.Client(timeout=httpx.Timeout(8.0), follow_redirects=False,
+                      headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 CrayonReader/1.0", "Accept": "text/html,text/plain;q=0.9"}) as c:
+        for _ in range(4):
+            if not _safe_url(cur):
+                return None, "That address can't be fetched."
+            with c.stream("GET", cur) as r:
+                if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
+                    cur = urljoin(cur, r.headers["location"])
+                    continue
+                if r.status_code >= 400:
+                    return None, "The site returned an error (%d)." % r.status_code
+                ct = r.headers.get("content-type", "").lower()
+                if not any(t in ct for t in ("text/html", "text/plain", "application/xhtml")):
+                    return None, "Not a readable web page."
+                buf = b""
+                for chunk in r.iter_bytes():
+                    buf += chunk
+                    if len(buf) > 1_500_000:
+                        break
+                html = buf.decode(r.encoding or "utf-8", "replace")
+                break
+        else:
+            return None, "Too many redirects."
+    if "text/plain" in ct:
+        text, title = html, ""
+    else:
+        text = trafilatura.extract(html, include_links=False, include_comments=False, favor_recall=True) or ""
+        m = trafilatura.extract_metadata(html)
+        title = (m.title if m and m.title else "")
+    text = text.strip()
+    if not text:
+        return None, "Couldn't read any text from that page."
+    return {"url": cur, "title": title[:200], "text": text[:9000]}, None
+
+
+@app.post("/api/fetch")
+async def fetch_page(req: Request):
+    if int(req.headers.get("content-length") or 0) > 2000:
+        return JSONResponse({"error": "Request too large."}, status_code=413)
+    try:
+        url = str((await req.json()).get("url", "")).strip()[:600]
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+    if not url:
+        return JSONResponse({"error": "empty url"}, status_code=400)
+    msg = limited(client_ip(req))
+    if msg:
+        return JSONResponse({"error": msg}, status_code=429)
+    hit = _fcache.get(url)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    try:
+        res, err = await asyncio.wait_for(asyncio.to_thread(_do_fetch, url), timeout=20)
+    except Exception:
+        return JSONResponse({"error": "Couldn't open that page."}, status_code=502)
+    if err:
+        return JSONResponse({"error": err}, status_code=422)
+    if len(_fcache) > 100:
+        _fcache.clear()
+    _fcache[url] = (time.time(), res)
+    return res
+
+
 @app.post("/api/reset")
 async def reset(req: Request):
     try:

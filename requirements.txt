@@ -7,3 +7,4 @@ ddgs
 httpx
 cryptography
 psycopg[binary]>=3.1
+trafilatura
