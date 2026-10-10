@@ -16,7 +16,26 @@
     s = s.replace(/(^|[\s(>])(https?:\/\/[^\s<)]+[^\s<).,;:!?])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
     return s;
   }
+  function renumberLists(src) {
+    // Models often emit "1. 1. 1." (valid markdown); renumber each run sequentially.
+    const lines = src.split('\n'); let n = 0, blank = 0; renumberLists._s = null;
+    return lines.map((l) => {
+      const m = l.match(/^(\s*)(?:\*\*)?(\d+)([.)])(\s|\*\*)/);
+      if (!m) {
+        if (!l.trim()) { blank += 1; if (blank >= 2) n = 0; }
+        else { blank = 0; if (/^\s*#{1,4}\s/.test(l)) n = 0; }
+        return l;
+      }
+      blank = 0;
+      const style = l.includes('**') ? 'b' : 'p';
+      if (style !== renumberLists._s) n = 0;
+      renumberLists._s = style;
+      n += 1;
+      return l.replace(/^(\s*)(?:\*\*)?\d+([.)])/, (w, ws, p) => ws + (w.includes('**') ? '**' : '') + n + p);
+    }).join('\n');
+  }
   function md(src) {
+    src = renumberLists(src);
     const blocks = [];
     let s = esc(src).replace(/```([\w-]*)\n?([\s\S]*?)(```|$)/g, (_, l, c) => {
       if (l === 'gmail' || l === 'web-search' || l === 'web-fetch') { blocks.push(''); return '\u0000' + (blocks.length - 1) + '\u0000'; }
