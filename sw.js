@@ -1,5 +1,5 @@
 // Crayon service worker: cache only the static app shell. Never touch /api, /auth or /setup (streaming + sessions).
-const V = 'crayon-v1';
+const V = 'crayon-v2';
 const SHELL = ['/static/style.css', '/static/app.js', '/static/crayon.svg', '/static/favicon.svg', '/static/icon-192.png', '/static/icon-512.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(V).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== V).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });

@@ -208,7 +208,6 @@
         }
       }
       if (!me.configured) return;
-      document.querySelectorAll('.card[data-mail]').forEach((x) => x.classList.remove('hide'));
       b.classList.remove('hide'); signedIn = !!me.signed_in;
       if (signedIn) { a.textContent = me.email; a.classList.remove('hide'); b.textContent = 'Disconnect'; b.onclick = async () => { if (!confirm('Disconnect Gmail and sign out of Crayon?')) return; await fetch('/auth/disconnect', {method: 'POST', headers: XH}); location.href = '/'; }; }
       else { b.textContent = 'Connect Gmail'; b.onclick = () => { location.href = '/auth/google/login'; }; }
@@ -362,6 +361,7 @@
     }
     planFinish();
     setBusy(false); input.focus();
+    if (finalAcc) refreshChats();
     if (wantSpeak) { wantSpeak = false; speak(finalAcc); }
   }
 
@@ -376,39 +376,86 @@
   $('#form').addEventListener('submit', (e) => { e.preventDefault(); if (busy) { stopNow(); return; } ask(input.value); });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) ask(input.value); } });
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 180) + 'px'; send.disabled = busy || (!input.value.trim() && !pending.length); });
-  document.querySelectorAll('.card').forEach((c) => c.addEventListener('click', () => {
-    if (busy) return;
-    if (c.dataset.act === 'attach') { fileInput.click(); return; }
-    if (c.dataset.mail && !signedIn) { location.href = '/auth/google/login'; return; }
-    ask(c.dataset.prompt || '');
-  }));
   log.addEventListener('click', (e) => {
     const b = e.target.closest('.cp'); if (!b) return;
     const t = b.closest('.code').querySelector('pre').innerText;
     (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); }).catch(() => {});
   });
-  $('#new').addEventListener('click', () => {
+  function newChat() {
     stopNow(); stopped = false;
     fetch('/api/reset', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: sid})}).catch(() => {});
     sid = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)) + '';
-    killWorker(); store.clear(); pending = []; renderPending(); log.innerHTML = ''; hero.classList.remove('hide'); input.focus();
-  });
-  async function loadHistory() {
+    killWorker(); store.clear(); pending = []; renderPending(); log.innerHTML = ''; hero.classList.remove('hide'); markActive(); closeSide(); input.focus();
+  }
+  $('#new').addEventListener('click', newChat);
+  const nc2 = $('#newchat'); if (nc2) nc2.addEventListener('click', newChat);
+  // ---- history sidebar ----
+  let chatList = [];
+  const sideEl = $('#side'), scrim = $('#scrim'), listEl = $('#chatlist');
+  function closeSide() { if (sideEl) sideEl.classList.remove('open'); if (scrim) scrim.classList.remove('on'); }
+  const menuBtn = $('#menu');
+  if (menuBtn) menuBtn.addEventListener('click', () => { const open = sideEl.classList.toggle('open'); scrim.classList.toggle('on', open); });
+  if (scrim) scrim.addEventListener('click', closeSide);
+  function markActive() {
+    if (!listEl) return;
+    listEl.querySelectorAll('.chatitem').forEach((el) => el.classList.toggle('active', el.dataset.sid === sid));
+  }
+  function renderChats() {
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    if (!chatList.length) { const d = document.createElement('div'); d.className = 'sd-empty'; d.textContent = 'Your past chats will appear here.'; listEl.appendChild(d); return; }
+    for (const c of chatList) {
+      const it = document.createElement('div');
+      it.className = 'chatitem' + (c.sid === sid ? ' active' : '');
+      it.dataset.sid = c.sid;
+      const t = document.createElement('span'); t.className = 'ct'; t.textContent = c.title || 'Chat'; t.title = c.title || 'Chat';
+      const x = document.createElement('button'); x.className = 'cdel'; x.type = 'button'; x.textContent = '\u00d7'; x.title = 'Delete this chat'; x.setAttribute('aria-label', 'Delete chat');
+      x.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this chat? This cannot be undone.')) return;
+        try { await fetch('/api/chats/' + encodeURIComponent(c.sid), {method: 'DELETE', headers: {'X-Requested-With': 'crayon'}}); } catch (_) {}
+        chatList = chatList.filter((k) => k.sid !== c.sid);
+        renderChats();
+        if (c.sid === sid) newChat();
+      });
+      it.addEventListener('click', () => openChat(c.sid));
+      it.append(t, x); listEl.appendChild(it);
+    }
+  }
+  async function refreshChats() {
     try {
-      const h = await (await fetch('/api/history')).json();
-      const ms = h.messages || [];
+      const j = await (await fetch('/api/chats')).json();
+      chatList = j.chats || [];
+      renderChats();
+    } catch (_) {}
+  }
+  async function openChat(sid2) {
+    if (busy) return;
+    stopNow(); stopped = false;
+    sid = sid2;
+    killWorker(); store.clear(); pending = []; renderPending(); log.innerHTML = '';
+    try {
+      const j = await (await fetch('/api/chats/' + encodeURIComponent(sid2))).json();
+      const ms = j.messages || [];
       if (ms.length) {
         hero.classList.add('hide');
         for (const m of ms) add(m.role === 'user' ? 'user' : 'ai', m.role === 'ai' ? md(m.text) : esc(m.text));
         stick(true);
-      }
-    } catch (_) {}
+      } else hero.classList.remove('hide');
+    } catch (_) { hero.classList.remove('hide'); }
+    markActive(); closeSide(); input.focus();
   }
-  $('#forget').addEventListener('click', async () => {
+  async function bootChats() {
+    await refreshChats();
+    if (chatList.length) openChat(chatList[0].sid);
+  }
+  const forgetHandler = async () => {
     if (!confirm('Delete everything Crayon remembers about you? This wipes your saved chats and cannot be undone.')) return;
     try { await fetch('/api/forget', {method: 'POST', headers: XH}); } catch (_) {}
     location.href = '/';
-  });
+  };
+  $('#forget').addEventListener('click', forgetHandler);
+  const f2 = $('#forget2'); if (f2) f2.addEventListener('click', forgetHandler);
   $('#sharebtn').addEventListener('click', async () => {
     try {
       const r = await fetch('/api/share', {method: 'POST', headers: XH, body: '{}'});
@@ -492,7 +539,7 @@
     liveLoop();
   });
 
-  loadHistory(); loadMe(); send.disabled = true; input.focus();
+  bootChats(); loadMe(); send.disabled = true; input.focus();
 })();
 
 if ('serviceWorker' in navigator) { window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {})); }

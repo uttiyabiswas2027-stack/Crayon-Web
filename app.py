@@ -216,6 +216,7 @@ async def chat(req: Request):
                 hist.append(("ai", full))
                 del hist[:-MAX_TURNS * 2]
                 await asyncio.to_thread(memory.save_turn, vid, text, full)
+                await asyncio.to_thread(memory.save_chat_turn, vid, sid, text, full)
                 asyncio.create_task(asyncio.to_thread(memory.event, vid, "model:" + str(used_model)))
         except Exception as e:  # never leak keys or internals
             print("llm error:", type(e).__name__, str(e)[:200].replace(os.environ.get("GEMINI_API_KEY", "#"), "***"))

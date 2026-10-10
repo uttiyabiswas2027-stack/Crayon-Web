@@ -110,6 +110,64 @@ def save_turn(vid: str, user_text: str, ai_text: str):
         print("mem save:", type(e).__name__)
 
 
+CHAT_KEEP = 200        # rows kept per chat
+CHATS_MAX = 50         # chats listed per visitor
+
+
+def save_chat_turn(vid: str, sid: str, user_text: str, ai_text: str):
+    """Per-session transcript for the history sidebar (separate from rolling memory)."""
+    if not on() or not sid:
+        return
+    try:
+        f = _fernet()
+        now = int(time.time())
+        title = (user_text.strip().split("\n")[0] or "Chat")[:60]
+        db("INSERT INTO cw_cmsgs (vid, sid, role, enc, ts) VALUES (%s, %s, %s, %s, %s)", (vid, sid, "user", f.encrypt(user_text[:MAX_STORE].encode()).decode(), now))
+        db("INSERT INTO cw_cmsgs (vid, sid, role, enc, ts) VALUES (%s, %s, %s, %s, %s)", (vid, sid, "ai", f.encrypt(ai_text[:MAX_STORE].encode()).decode(), now))
+        db("INSERT INTO cw_chats (vid, sid, title, updated) VALUES (%s, %s, %s, %s) ON CONFLICT (vid, sid) DO UPDATE SET updated = excluded.updated",
+           (vid, sid, title, now))
+        db("DELETE FROM cw_cmsgs WHERE vid = %s AND sid = %s AND (ts < %s OR id NOT IN (SELECT id FROM cw_cmsgs WHERE vid = %s AND sid = %s ORDER BY id DESC LIMIT %s))",
+           (vid, sid, now - MEM_DAYS * 86400, vid, sid, CHAT_KEEP))
+        db("DELETE FROM cw_chats WHERE vid = %s AND sid NOT IN (SELECT sid FROM cw_chats WHERE vid = %s ORDER BY updated DESC LIMIT %s)",
+           (vid, vid, CHATS_MAX * 2))
+    except Exception as e:
+        print("chat save:", type(e).__name__)
+
+
+def list_chats(vid: str):
+    try:
+        rows = db("SELECT sid, title, updated FROM cw_chats WHERE vid = %s ORDER BY updated DESC LIMIT %s", (vid, CHATS_MAX), True) or []
+        return [{"sid": r[0], "title": r[1], "updated": r[2]} for r in rows]
+    except Exception as e:
+        print("chat list:", type(e).__name__)
+        return []
+
+
+def load_chat(vid: str, sid: str):
+    try:
+        rows = db("SELECT role, enc FROM cw_cmsgs WHERE vid = %s AND sid = %s ORDER BY id DESC LIMIT 120", (vid, sid), True) or []
+    except Exception as e:
+        print("chat load:", type(e).__name__)
+        return []
+    out = []
+    f = _fernet()
+    for role, enc in rows:
+        try:
+            out.append({"role": role, "text": f.decrypt(enc.encode()).decode()})
+        except Exception:
+            pass
+    out.reverse()
+    return out
+
+
+def delete_chat(vid: str, sid: str):
+    try:
+        db("DELETE FROM cw_cmsgs WHERE vid = %s AND sid = %s", (vid, sid))
+        db("DELETE FROM cw_chats WHERE vid = %s AND sid = %s", (vid, sid))
+    except Exception as e:
+        print("chat delete:", type(e).__name__)
+
+
 def boundary(vid: str):
     """Marks 'new chat': context and history start fresh, memory is kept."""
     if not on():
@@ -235,8 +293,39 @@ def history(req: Request):
 def forget_vid(vid: str):
     try:
         db("DELETE FROM cw_mem WHERE vid = %s", (vid,))
+        db("DELETE FROM cw_cmsgs WHERE vid = %s", (vid,))
+        db("DELETE FROM cw_chats WHERE vid = %s", (vid,))
     except Exception as e:
         print("mem forget:", type(e).__name__)
+
+
+@router.get("/api/chats")
+def chats(req: Request):
+    vid, new = identity(req)
+    r = JSONResponse({"chats": list_chats(vid) if on() else []})
+    if new:
+        set_vid_cookie(r, vid)
+    return r
+
+
+@router.get("/api/chats/{sid}")
+def chat_messages(req: Request, sid: str):
+    vid, new = identity(req)
+    sid = sid[:64]
+    r = JSONResponse({"messages": load_chat(vid, sid) if on() else []})
+    if new:
+        set_vid_cookie(r, vid)
+    return r
+
+
+@router.delete("/api/chats/{sid}")
+def chat_delete(req: Request, sid: str):
+    if req.headers.get("x-requested-with") != "crayon":
+        return JSONResponse({"error": "bad request"}, status_code=403)
+    vid, _ = identity(req)
+    if on():
+        delete_chat(vid, sid[:64])
+    return JSONResponse({"ok": True})
 
 
 @router.post("/api/forget")

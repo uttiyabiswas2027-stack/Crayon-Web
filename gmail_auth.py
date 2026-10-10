@@ -71,7 +71,10 @@ def db(sql: str, args=(), fetch=False):
                        "CREATE TABLE IF NOT EXISTS cw_shares (sid TEXT PRIMARY KEY, vid TEXT NOT NULL, enc TEXT NOT NULL, created BIGINT NOT NULL)",
                        "CREATE TABLE IF NOT EXISTS cw_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
                        "CREATE INDEX IF NOT EXISTS cw_mem_vid ON cw_mem (vid, id)",
-                       "CREATE INDEX IF NOT EXISTS cw_events_ts ON cw_events (ts)"]
+                       "CREATE INDEX IF NOT EXISTS cw_events_ts ON cw_events (ts)",
+                       "CREATE TABLE IF NOT EXISTS cw_chats (vid TEXT NOT NULL, sid TEXT NOT NULL, title TEXT NOT NULL, updated BIGINT NOT NULL, PRIMARY KEY (vid, sid))",
+                       "CREATE TABLE IF NOT EXISTS cw_cmsgs (id %s PRIMARY KEY, vid TEXT NOT NULL, sid TEXT NOT NULL, role TEXT NOT NULL, enc TEXT NOT NULL, ts BIGINT NOT NULL)" % ("SERIAL" if pg else "INTEGER"),
+                       "CREATE INDEX IF NOT EXISTS cw_cmsgs_vs ON cw_cmsgs (vid, sid, id)"]
                 for d in ddl:
                     c.execute(d)
                 c.commit()
