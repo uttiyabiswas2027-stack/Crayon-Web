@@ -178,6 +178,21 @@
     return out;
   }
 
+  const thinkWords = ['Thinking', 'Pondering', 'Connecting ideas', 'Untangling', 'Piecing it together'];
+  function startThink(bub) {
+    stopThink(bub);
+    let i = 0;
+    bub._think = setInterval(() => {
+      const el = bub.querySelector('.think');
+      if (!el) { stopThink(bub); return; }
+      i++;
+      const secs = i * 3;
+      if (secs >= 30) el.textContent = 'Taking longer than usual - the free host may be waking up';
+      else if (secs >= 12) el.textContent = 'Still working on it';
+      else el.textContent = thinkWords[i % thinkWords.length];
+    }, 3000);
+  }
+  function stopThink(bub) { if (bub && bub._think) { clearInterval(bub._think); bub._think = 0; } }
   async function stream(text, bub) {
     let acc = '', raf = 0, modelTag = '';
     try {
@@ -195,12 +210,12 @@
           const d = line.slice(5).trim(); if (d === '[DONE]') continue;
           try {
             const j = JSON.parse(d);
-            if (j.m) { modelTag = j.m; } if (j.t) { acc += j.t; if (!raf) raf = requestAnimationFrame(() => { raf = 0; bub.innerHTML = md(acc); stick(); }); }
+            if (j.m) { modelTag = j.m; } if (j.t) { stopThink(bub); acc += j.t; if (!raf) raf = requestAnimationFrame(() => { raf = 0; bub.innerHTML = md(acc); stick(); }); }
             if (j.err) { bub.parentElement.classList.add('err'); bub.textContent = j.err; return null; }
           } catch (_) {}
         }
       }
-    } catch (e) { if (stopped) { return null; } bub.parentElement.classList.add('err'); bub.textContent = 'Connection problem. Please try again.'; return null; }
+    } catch (e) { stopThink(bub); if (stopped) { return null; } bub.parentElement.classList.add('err'); bub.textContent = 'Connection problem. Please try again.'; return null; }
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     bub.innerHTML = md(acc);
     if (modelTag && acc) { const t = document.createElement('div'); t.className = 'mtag'; t.textContent = 'via ' + modelTag; bub.appendChild(t); }
@@ -286,7 +301,9 @@
     const TCAP = agentMode ? 8 : 5;
     for (let step = 0; step < TCAP + 1; step++) {
       const bub = add('ai', '<span class="think">Thinking</span>');
+      startThink(bub);
       const acc = await stream(msg, bub);
+      stopThink(bub);
       if (acc !== null) finalAcc = acc;
       if (acc === null || stopped) break;
       const pm = agentMode && acc.match(/```plan\n([\s\S]*?)```/);
@@ -705,6 +722,7 @@
         const j = await r.json();
         const t = (j.text || '').trim();
         if (t) { input.value = t; wantSpeak = true; ask(t); }
+        else if (SR) { toast('Heard nothing - trying browser dictation. Speak now.'); startSrMic(); }
         else toast('Heard nothing - try again.');
       } catch (_) { toast('Transcription failed - try again.'); }
     };
@@ -836,8 +854,22 @@
     const src = liveCtx.createMediaStreamSource(liveStream);
     liveNode = liveCtx.createScriptProcessor(4096, 1, 1);
     const inRate = liveCtx.sampleRate;
+    let maxAbs = 0, capStart = 0, watched = false;
     liveNode.onaudioprocess = (e) => {
-      if (liveWs && liveWs.readyState === 1) liveWs.send(JSON.stringify({audio: b64pcm(downsample(e.inputBuffer.getChannelData(0), inRate, 16000))}));
+      const d = e.inputBuffer.getChannelData(0);
+      for (let i = 0; i < d.length; i += 8) { const a = d[i] < 0 ? -d[i] : d[i]; if (a > maxAbs) maxAbs = a; }
+      if (!capStart) capStart = Date.now();
+      if (!watched && Date.now() - capStart > 8000) {
+        watched = true;
+        if (maxAbs < 0.00001) {
+          toast('Mic audio is not reaching Crayon - switching to basic voice mode.');
+          stopLive();
+          live = true; liveBtn.classList.add('listening');
+          startSrLive();
+          return;
+        }
+      }
+      if (liveWs && liveWs.readyState === 1) liveWs.send(JSON.stringify({audio: b64pcm(downsample(d, inRate, 16000))}));
     };
     src.connect(liveNode); liveNode.connect(liveCtx.destination);
     toast('Gemini Live on - just talk. Tap the same button to stop.');
