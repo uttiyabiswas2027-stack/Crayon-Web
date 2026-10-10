@@ -233,6 +233,7 @@ async def chat(req: Request):
 
 
 _scache: dict = {}
+_stcache: dict = {}
 
 
 def _do_search(q: str):
@@ -473,6 +474,9 @@ async def stock(req: Request, sym: str = ""):
     msg = limited(client_ip(req))
     if msg:
         return JSONResponse({"error": msg}, status_code=429)
+    hit = _stcache.get(sym)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
     try:
         import datetime as _dt
         async with httpx.AsyncClient(timeout=10, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}) as c:
@@ -486,10 +490,12 @@ async def stock(req: Request, sym: str = ""):
             return JSONResponse({"error": "Unknown ticker."}, status_code=404)
         ts = meta.get("regularMarketTime")
         when = _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M UTC") if ts else ""
-        return {"symbol": meta.get("symbol", sym), "name": meta.get("shortName") or meta.get("longName") or "",
+        out = {"symbol": meta.get("symbol", sym), "name": meta.get("shortName") or meta.get("longName") or "",
                 "price": price, "prev": meta.get("chartPreviousClose"), "currency": meta.get("currency", ""),
                 "exchange": meta.get("fullExchangeName") or meta.get("exchangeName") or "",
                 "date": when, "source": "yahoo finance"}
+        _stcache[sym] = (time.time(), out)
+        return out
     except Exception as e:
         print("stock:", type(e).__name__)
         return JSONResponse({"error": "Quotes are unavailable right now."}, status_code=503)
