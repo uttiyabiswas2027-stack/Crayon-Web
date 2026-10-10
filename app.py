@@ -3,13 +3,16 @@ from collections import OrderedDict, defaultdict, deque
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import llm
 import gmail_auth
 import keystore
+import memory
 import telegram_bot
+import discord_bot
+import twilio_wa
 
 BASE = Path(__file__).parent
 MAX_MSG = 9000
@@ -31,10 +34,22 @@ if not _S.exists():
             shutil.copy(BASE / _n, _S / _n)
 app.include_router(gmail_auth.router)
 app.include_router(keystore.router)
+app.include_router(memory.router)
 app.include_router(telegram_bot.router)
+app.include_router(twilio_wa.router)
 keystore.load_into_env()
+if os.environ.get("NEON_DATABASE_URL"):
+    try:
+        import psycopg
+        psycopg.connect(os.environ["NEON_DATABASE_URL"], connect_timeout=8).close()
+        gmail_auth._DB = os.environ["NEON_DATABASE_URL"]
+        gmail_auth._ready = False
+    except Exception as e:
+        print("neon boot check failed, staying on DATABASE_URL:", type(e).__name__)
+gmail_auth.migrate_if_needed()
 import threading
 threading.Thread(target=lambda: telegram_bot.register() if telegram_bot.token() else None, daemon=True).start()
+threading.Thread(target=lambda: discord_bot.register() if discord_bot.token() else None, daemon=True).start()
 app.mount("/static", StaticFiles(directory=_S), name="static")
 
 sessions: "OrderedDict[str, list]" = OrderedDict()
@@ -153,23 +168,30 @@ async def chat(req: Request):
         mail_on = bool(body.get("mail")) and gmail_auth.current_user(req) is not None
     except Exception:
         mail_on = False
-    hist = sessions.get(sid, [])
+    agent_on = bool(body.get("agent"))
+    vid, new_vid = memory.identity(req)
+    hist = sessions.get(sid)
+    if hist is None:
+        hist = await asyncio.to_thread(memory.load_context, vid)
     sessions[sid] = hist
     sessions.move_to_end(sid)
     while len(sessions) > MAX_SESSIONS:
         sessions.popitem(last=False)
+    asyncio.create_task(asyncio.to_thread(memory.event, vid, "agent" if agent_on else "chat"))
 
     async def gen():
         out = []
         active["n"] += 1
         try:
+            used_model = None
             steps = llm.plan(text) if llm.provider() == "gemini" else [("gemini", None, "default")]
             last = None
             for kind, nm, lab in steps:
                 try:
                     mdl = llm.build_or(nm) if kind == "or" else model(nm)
+                    used_model = nm
                     sent_label = False
-                    async for ch in mdl.astream(llm.to_messages(hist[-MAX_TURNS * 2:], text, mail_on)):
+                    async for ch in mdl.astream(llm.to_messages(hist[-MAX_TURNS * 2:], text, mail_on, agent_on)):
                         tt = llm.chunk_text(ch)
                         if tt:
                             if not sent_label:
@@ -193,6 +215,8 @@ async def chat(req: Request):
                 hist.append(("user", text))
                 hist.append(("ai", full))
                 del hist[:-MAX_TURNS * 2]
+                await asyncio.to_thread(memory.save_turn, vid, text, full)
+                asyncio.create_task(asyncio.to_thread(memory.event, vid, "model:" + str(used_model)))
         except Exception as e:  # never leak keys or internals
             print("llm error:", type(e).__name__, str(e)[:200].replace(os.environ.get("GEMINI_API_KEY", "#"), "***"))
             yield f"data: {json.dumps({'err': 'Crayon hit a snag talking to its brain. Please try again in a moment.'})}\n\n"
@@ -200,8 +224,11 @@ async def chat(req: Request):
             active["n"] = max(0, active["n"] - 1)
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(gen(), media_type="text/event-stream",
+    resp = StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    if new_vid:
+        memory.set_vid_cookie(resp, vid)
+    return resp
 
 
 _scache: dict = {}
@@ -255,6 +282,9 @@ async def search(req: Request):
     msg = limited(client_ip(req))
     if msg:
         return JSONResponse({"error": msg}, status_code=429)
+    v0, n0 = memory.identity(req)
+    if not n0:
+        asyncio.create_task(asyncio.to_thread(memory.event, v0, "search"))
     now = time.time()
     hit = _scache.get(q.lower())
     if hit and now - hit[0] < 300:
@@ -344,6 +374,9 @@ async def fetch_page(req: Request):
     msg = limited(client_ip(req))
     if msg:
         return JSONResponse({"error": msg}, status_code=429)
+    v0, n0 = memory.identity(req)
+    if not n0:
+        asyncio.create_task(asyncio.to_thread(memory.event, v0, "fetch"))
     hit = _fcache.get(url)
     if hit and time.time() - hit[0] < 600:
         return hit[1]
@@ -359,6 +392,21 @@ async def fetch_page(req: Request):
     return res
 
 
+@app.get("/api/image")
+async def image(req: Request, prompt: str = ""):
+    prompt = prompt.strip()[:400]
+    if not prompt:
+        return JSONResponse({"error": "empty prompt"}, status_code=400)
+    msg = limited(client_ip(req))
+    if msg:
+        return JSONResponse({"error": msg}, status_code=429)
+    v0, n0 = memory.identity(req)
+    if not n0:
+        asyncio.create_task(asyncio.to_thread(memory.event, v0, "image"))
+    from urllib.parse import quote
+    return RedirectResponse("https://image.pollinations.ai/prompt/" + quote(prompt) + "?width=1024&height=1024&nologo=true", status_code=302)
+
+
 @app.post("/api/reset")
 async def reset(req: Request):
     try:
@@ -366,4 +414,6 @@ async def reset(req: Request):
     except Exception:
         sid = ""
     sessions.pop(sid, None)
+    vid, _ = memory.identity(req)
+    await asyncio.to_thread(memory.boundary, vid)
     return {"ok": True}

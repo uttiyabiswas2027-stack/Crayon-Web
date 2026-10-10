@@ -163,7 +163,7 @@
     let acc = '', raf = 0, modelTag = '';
     try {
       ctl = new AbortController();
-      const r = await fetch('/api/chat', {signal: ctl.signal, method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: sid, message: text, mail: signedIn})});
+      const r = await fetch('/api/chat', {signal: ctl.signal, method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: sid, message: text, mail: signedIn, agent: agentMode})});
       if (!r.ok) { const j = await r.json().catch(() => ({})); bub.parentElement.classList.add('err'); bub.textContent = j.error || 'Something went wrong.'; return null; }
       const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
       for (;;) {
@@ -190,11 +190,23 @@
   }
 
   let signedIn = false;
+  let agentMode = false, planBox = null;
   const XH = {'Content-Type': 'application/json', 'X-Requested-With': 'crayon'};
   async function loadMe() {
     try {
       const me = await (await fetch('/api/me')).json();
       const b = $('#mailbtn'), a = $('#acct');
+      if (me.profiles) {
+        const sb = $('#signin'), av = $('#avatar');
+        const out = async () => { if (!confirm('Sign out of Crayon on this device? Your saved chats stay remembered here.')) return; await fetch('/auth/signout', {method: 'POST', headers: XH}); location.href = '/'; };
+        if (me.profile) {
+          if (me.profile.picture) { av.src = me.profile.picture; av.classList.remove('hide'); av.title = 'Signed in - click to sign out'; av.onclick = out; }
+          a.textContent = me.profile.name || me.profile.email || ''; a.classList.remove('hide'); a.style.cursor = 'pointer'; a.onclick = out;
+        } else {
+          sb.classList.remove('hide');
+          sb.onclick = () => { location.href = '/auth/signin/google'; };
+        }
+      }
       if (!me.configured) return;
       document.querySelectorAll('.card[data-mail]').forEach((x) => x.classList.remove('hide'));
       b.classList.remove('hide'); signedIn = !!me.signed_in;
@@ -216,6 +228,25 @@
     box.querySelector('.st').textContent = txt;
     row.append(img, box); log.appendChild(row); stick(); return box;
   }
+  function planCard(text) {
+    if (!planBox || !planBox.isConnected) {
+      const row = document.createElement('div'); row.className = 'msg ai';
+      const img = document.createElement('img'); img.src = '/static/crayon.svg'; img.alt = ''; img.className = 'face';
+      planBox = document.createElement('div'); planBox.className = 'planbox';
+      row.append(img, planBox); log.appendChild(row); stick();
+    }
+    const lines = String(text).split('\n').map((l) => l.trim()).filter((l) => /^\d+[.)]/.test(l.replace(/^->\s*/, '')));
+    let html = '<div class="pt">Agent plan</div><ol>';
+    for (let l of lines.slice(0, 8)) {
+      const cur = /(^|\s)->\s*/.test(l);
+      const done = /\[x\]\s*$/i.test(l);
+      l = l.replace(/^->\s*/, '').replace(/^(\d+[.)]\s*)->\s*/, '$1');
+      const txt = l.replace(/^\d+[.)]\s*/, '').replace(/\s*\[x\]\s*$/i, '');
+      html += '<li class="' + (done ? 'done' : cur ? 'cur' : '') + '">' + esc(txt) + '</li>';
+    }
+    planBox.innerHTML = html + '</ol>';
+  }
+  function planFinish() { if (planBox && planBox.isConnected) planBox.querySelectorAll('li').forEach((li) => { li.classList.remove('cur'); li.classList.add('done'); }); }
   async function ask(raw) {
     const typed = raw.trim();
     if (busy || (!typed && !pending.length)) return;
@@ -231,13 +262,24 @@
     add('user', shown);
     input.value = ''; input.style.height = 'auto';
     setBusy(true); stopped = false; pinned = true; stick(true);
+    if (agentMode) planBox = null;
     let msg = text;
-    for (let step = 0; step < 6; step++) {
+    let finalAcc = '';
+    const TCAP = agentMode ? 8 : 5;
+    for (let step = 0; step < TCAP + 1; step++) {
       const bub = add('ai', '<span class="think">Thinking</span>');
       const acc = await stream(msg, bub);
+      if (acc !== null) finalAcc = acc;
       if (acc === null || stopped) break;
+      const pm = agentMode && acc.match(/```plan\n([\s\S]*?)```/);
+      if (pm) {
+        const rest = acc.replace(pm[0], '').trim(); if (rest) bub.innerHTML = md(rest); else bub.parentElement.remove();
+        planCard(pm[1]);
+        msg = '[Plan shown]';
+        continue;
+      }
       const gm = signedIn && acc.match(/```gmail\n([\s\S]*?)```/);
-      if (gm && step < 5) {
+      if (gm && step < TCAP) {
         const rest = acc.replace(gm[0], '').trim(); if (rest) bub.innerHTML = md(rest); else bub.parentElement.remove();
         let req = null, out;
         try { req = JSON.parse(gm[1]); } catch (_) {}
@@ -264,7 +306,7 @@
         continue;
       }
       const fm = acc.match(/```web-fetch\n([\s\S]*?)```/);
-      if (fm && step < 6) {
+      if (fm && step <= TCAP) {
         const rest = acc.replace(fm[0], '').trim(); if (rest) bub.innerHTML = md(rest); else bub.parentElement.remove();
         const url = fm[1].trim().split('\n')[0].slice(0, 600);
         let host = url; try { host = new URL(url).hostname.replace(/^www\./, ''); } catch (_) {}
@@ -281,7 +323,7 @@
         continue;
       }
       const sm = acc.match(/```web-search\n([\s\S]*?)```/);
-      if (sm && step < 5) {
+      if (sm && step < TCAP) {
         const rest = acc.replace(sm[0], '').trim(); if (rest) bub.innerHTML = md(rest); else bub.parentElement.remove();
         const q = sm[1].trim().split('\n')[0].slice(0, 200);
         const sc = searchCard(q);
@@ -295,18 +337,42 @@
         msg = '[Search results for: ' + q + ']\n' + (items.length ? items.map((x, i) => (i + 1) + '. ' + x.title + (x.date ? ' (' + x.date + ')' : '') + '\n   ' + x.url + '\n   ' + x.snippet).join('\n') : '(no results' + (err ? ': ' + err : '') + ')');
         continue;
       }
+      const ig = acc.match(/```image-gen\n([\s\S]*?)```/);
+      if (ig && step < TCAP) {
+        const rest = acc.replace(ig[0], '').trim(); if (rest) bub.innerHTML = md(rest); else bub.parentElement.remove();
+        const promptTxt = ig[1].trim().split('\n')[0].slice(0, 400);
+        const card = searchCard('Creating an image');
+        const url = '/api/image?prompt=' + encodeURIComponent(promptTxt);
+        const im2 = new Image();
+        im2.src = url; im2.alt = promptTxt; im2.style.cssText = 'max-width:280px;width:100%;border-radius:12px;display:block';
+        im2.onload = () => { card.classList.remove('busy'); card.querySelector('.st').textContent = 'Image ready - tap to open full size'; };
+        im2.onerror = () => { card.classList.remove('busy'); card.querySelector('.st').textContent = 'Image creation failed - try again'; };
+        const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.appendChild(im2);
+        card.querySelector('.srcs').appendChild(a);
+        msg = '[The image was generated and shown in the chat.]';
+        continue;
+      }
       const m = acc.match(/```python-run\n([\s\S]*?)```/);
-      if (!m || step === 5) break;
+      if (!m || step === TCAP) break;
       const card = runCard();
       const res = await runPython(m[1], card);
       finishCard(card, res);
       const fl = (res.files || []).map((f) => f.name).join(', ');
       msg = '[Computer output]\n' + ((res.stdout || '').slice(0, 2500) || '(no output)') + (res.error ? '\n[Error]\n' + res.error.slice(0, 1200) : '') + (fl ? '\n[Files now in /work: ' + fl + ']' : '');
     }
+    planFinish();
     setBusy(false); input.focus();
+    if (wantSpeak) { wantSpeak = false; speak(finalAcc); }
   }
 
-  function stopNow() { stopped = true; try { ctl && ctl.abort(); } catch (_) {} killWorker(); }
+  function stopNow() { stopped = true; wantSpeak = false; if (typeof stopLive === 'function') stopLive(); try { ctl && ctl.abort(); } catch (_) {} try { window.speechSynthesis && speechSynthesis.cancel(); } catch (_) {} killWorker(); }
+  const agentBtn = $('#agentbtn');
+  if (agentBtn) agentBtn.addEventListener('click', () => {
+    agentMode = !agentMode;
+    agentBtn.classList.toggle('on', agentMode);
+    input.placeholder = agentMode ? 'Give Crayon a goal - it will plan, research, compute and deliver...' : 'Ask Crayon to do something...';
+    input.focus();
+  });
   $('#form').addEventListener('submit', (e) => { e.preventDefault(); if (busy) { stopNow(); return; } ask(input.value); });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) ask(input.value); } });
   input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 180) + 'px'; send.disabled = busy || (!input.value.trim() && !pending.length); });
@@ -327,7 +393,106 @@
     sid = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)) + '';
     killWorker(); store.clear(); pending = []; renderPending(); log.innerHTML = ''; hero.classList.remove('hide'); input.focus();
   });
-  loadMe(); send.disabled = true; input.focus();
+  async function loadHistory() {
+    try {
+      const h = await (await fetch('/api/history')).json();
+      const ms = h.messages || [];
+      if (ms.length) {
+        hero.classList.add('hide');
+        for (const m of ms) add(m.role === 'user' ? 'user' : 'ai', m.role === 'ai' ? md(m.text) : esc(m.text));
+        stick(true);
+      }
+    } catch (_) {}
+  }
+  $('#forget').addEventListener('click', async () => {
+    if (!confirm('Delete everything Crayon remembers about you? This wipes your saved chats and cannot be undone.')) return;
+    try { await fetch('/api/forget', {method: 'POST', headers: XH}); } catch (_) {}
+    location.href = '/';
+  });
+  $('#sharebtn').addEventListener('click', async () => {
+    try {
+      const r = await fetch('/api/share', {method: 'POST', headers: XH, body: '{}'});
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(j.error || 'Could not create a share link.'); return; }
+      const url = j.url;
+      if (navigator.share) { try { await navigator.share({title: 'Crayon chat', url}); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+      try { await navigator.clipboard.writeText(url); toast('Share link copied - anyone with it can read this chat.'); }
+      catch (_) { prompt('Copy your share link:', url); }
+    } catch (_) { toast('Could not create a share link.'); }
+  });
+
+  // ---- voice: speech input + spoken replies (browser-native, degrades gracefully) ----
+  let wantSpeak = false;
+  function speak(text) {
+    if (!window.speechSynthesis || !text) return;
+    try {
+      speechSynthesis.cancel();
+      const clean = text.replace(/```[\s\S]*?(```|$)/g, ' ').replace(/[*_`#\[\]()>]/g, '').replace(/https?:\/\/\S+/g, 'link').slice(0, 1200);
+      speechSynthesis.speak(new SpeechSynthesisUtterance(clean));
+    } catch (_) {}
+  }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    const mic = $('#mic');
+    mic.classList.remove('hide');
+    const rec = new SR();
+    rec.lang = navigator.language || 'en-US';
+    rec.interimResults = true;
+    let base = '';
+    rec.onresult = (e) => {
+      let t = '';
+      for (const r of e.results) t += r[0].transcript;
+      input.value = (base ? base + ' ' : '') + t.trim();
+      input.dispatchEvent(new Event('input'));
+    };
+    rec.onend = () => {
+      mic.classList.remove('listening');
+      const t = input.value.trim();
+      if (t) { wantSpeak = true; ask(t); }
+    };
+    rec.onerror = () => mic.classList.remove('listening');
+    mic.addEventListener('click', () => {
+      if (mic.classList.contains('listening')) { rec.stop(); return; }
+      try { base = input.value; mic.classList.add('listening'); rec.start(); } catch (_) {}
+    });
+  }
+
+  // ---- live voice mode: hands-free conversation loop ----
+  let live = false, liveRec = null;
+  const liveBtn = $('#live');
+  if (SR) liveBtn.classList.remove('hide');
+  function stopLive() {
+    live = false; liveBtn.classList.remove('listening');
+    try { liveRec && liveRec.stop(); } catch (_) {}
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch (_) {}
+  }
+  function liveLoop() {
+    if (!live) return;
+    liveRec = new SR();
+    liveRec.lang = navigator.language || 'en-US';
+    liveRec.interimResults = false;
+    let got = '';
+    liveRec.onresult = (e) => {
+      try { speechSynthesis.cancel(); } catch (_) {}
+      got = e.results[e.results.length - 1][0].transcript;
+    };
+    liveRec.onend = () => {
+      if (!live) return;
+      const t = got.trim();
+      if (t && !busy) { wantSpeak = true; ask(t).finally(() => { if (live) setTimeout(liveLoop, 600); }); }
+      else setTimeout(liveLoop, 400);
+    };
+    liveRec.onerror = () => { if (live) setTimeout(liveLoop, 900); };
+    try { liveRec.start(); } catch (_) { setTimeout(liveLoop, 900); }
+  }
+  if (SR) liveBtn.addEventListener('click', () => {
+    if (live) { stopLive(); return; }
+    live = true; liveBtn.classList.add('listening');
+    toast('Live mode on - just talk. Tap the same button to stop.');
+    liveLoop();
+  });
+
+  loadHistory(); loadMe(); send.disabled = true; input.focus();
 })();
 
 if ('serviceWorker' in navigator) { window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {})); }

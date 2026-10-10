@@ -41,7 +41,7 @@ def _unsign(s: str):
 
 
 # ---------- storage (Postgres on Render; sqlite fallback for local dev) ----------
-_DB = os.environ.get("DATABASE_URL", "")
+_DB = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
 _ready = False
 
 
@@ -63,7 +63,15 @@ def db(sql: str, args=(), fetch=False):
         try:
             if not _ready:
                 ddl = ["CREATE TABLE IF NOT EXISTS cw_users (id %s PRIMARY KEY, sub TEXT UNIQUE NOT NULL, email TEXT NOT NULL, refresh_enc TEXT NOT NULL, created BIGINT NOT NULL)" % ("SERIAL" if pg else "INTEGER"),
-                       "CREATE TABLE IF NOT EXISTS cw_sessions (h TEXT PRIMARY KEY, user_id INTEGER NOT NULL, exp BIGINT NOT NULL)"]
+                       "CREATE TABLE IF NOT EXISTS cw_sessions (h TEXT PRIMARY KEY, user_id INTEGER NOT NULL, exp BIGINT NOT NULL)",
+                       "CREATE TABLE IF NOT EXISTS cw_visitors (vid TEXT PRIMARY KEY, created BIGINT NOT NULL, last_seen BIGINT NOT NULL, gsub TEXT UNIQUE, name TEXT, email TEXT, picture TEXT)",
+                       "CREATE TABLE IF NOT EXISTS cw_mem (id %s PRIMARY KEY, vid TEXT NOT NULL, role TEXT NOT NULL, enc TEXT NOT NULL, ts BIGINT NOT NULL)" % ("SERIAL" if pg else "INTEGER"),
+                       "CREATE TABLE IF NOT EXISTS cw_signin (h TEXT PRIMARY KEY, vid TEXT NOT NULL, exp BIGINT NOT NULL)",
+                       "CREATE TABLE IF NOT EXISTS cw_events (id %s PRIMARY KEY, ts BIGINT NOT NULL, kind TEXT NOT NULL, vid TEXT)" % ("SERIAL" if pg else "INTEGER"),
+                       "CREATE TABLE IF NOT EXISTS cw_shares (sid TEXT PRIMARY KEY, vid TEXT NOT NULL, enc TEXT NOT NULL, created BIGINT NOT NULL)",
+                       "CREATE TABLE IF NOT EXISTS cw_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)",
+                       "CREATE INDEX IF NOT EXISTS cw_mem_vid ON cw_mem (vid, id)",
+                       "CREATE INDEX IF NOT EXISTS cw_events_ts ON cw_events (ts)"]
                 for d in ddl:
                     c.execute(d)
                 c.commit()
@@ -74,6 +82,54 @@ def db(sql: str, args=(), fetch=False):
             return rows
         finally:
             c.close()
+
+
+def migrate_if_needed():
+    """One-time copy of all cw_* rows from the old DATABASE_URL Postgres to NEON_DATABASE_URL.
+    Runs at boot only when both are set; marks itself done in cw_meta."""
+    src, dst = os.environ.get("DATABASE_URL", ""), os.environ.get("NEON_DATABASE_URL", "")
+    if not src.startswith("postgres") or not dst.startswith("postgres") or src == dst:
+        return
+    try:
+        done = db("SELECT v FROM cw_meta WHERE k = 'migrated_from_old'", (), True)
+        if done:
+            return
+        import psycopg
+        s = psycopg.connect(src, connect_timeout=8)
+        d = psycopg.connect(dst, connect_timeout=8)
+        try:
+            for table, cols in (("cw_users", "id, sub, email, refresh_enc, created"),
+                                ("cw_sessions", "h, user_id, exp"),
+                                ("cw_secrets", "name, val"),
+                                ("cw_visitors", "vid, created, last_seen, gsub, name, email, picture"),
+                                ("cw_mem", "id, vid, role, enc, ts"),
+                                ("cw_signin", "h, vid, exp"),
+                                ("cw_events", "id, ts, kind, vid")):
+                try:
+                    rows = s.execute(f"SELECT {cols} FROM {table}").fetchall()
+                except Exception:
+                    continue
+                ph = ",".join(["%s"] * len(cols.split(",")))
+                for row in rows:
+                    try:
+                        d.execute(f"INSERT INTO {table} ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING", row)
+                        d.commit()
+                    except Exception:
+                        d.rollback()
+            for table, seq in (("cw_users", "cw_users_id_seq"), ("cw_mem", "cw_mem_id_seq"), ("cw_events", "cw_events_id_seq")):
+                try:
+                    d.execute(f"SELECT setval('{seq}', COALESCE((SELECT MAX(id) FROM {table}), 1))")
+                    d.commit()
+                except Exception:
+                    d.rollback()
+            d.execute("INSERT INTO cw_meta (k, v) VALUES ('migrated_from_old', %s) ON CONFLICT DO NOTHING", (str(int(time.time())),))
+            d.commit()
+            print("db migrate: copied rows old -> neon")
+        finally:
+            s.close()
+            d.close()
+    except Exception as e:
+        print("db migrate:", type(e).__name__, str(e)[:120])
 
 
 def _hash(tok: str) -> str:
@@ -162,7 +218,15 @@ def callback(req: Request, code: str = "", state: str = "", error: str = ""):
 @router.get("/api/me")
 def me(req: Request):
     u = current_user(req)
-    return {"configured": enabled(), "signed_in": bool(u), "email": u[1] if u else None}
+    prof, profiles_on = None, False
+    try:
+        import memory
+        prof = memory.profile(req)
+        profiles_on = memory.oauth_on()
+    except Exception:
+        pass
+    return {"configured": enabled(), "signed_in": bool(u), "email": u[1] if u else None,
+            "profiles": profiles_on, "profile": prof}
 
 
 @router.post("/auth/logout")

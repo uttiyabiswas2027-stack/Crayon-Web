@@ -6,6 +6,8 @@ body{background:var(--bg);color:var(--ink);font:16px/1.6 Inter,-apple-system,Bli
 header{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);z-index:2}
 .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.2px}
 .hright{display:flex;gap:8px;align-items:center}
+.avatar{width:26px;height:26px;border-radius:50%;cursor:pointer}
+#mic.listening,#live.listening{color:#d6452f}
 .acct{font-size:13px;color:var(--mut);max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ghost{background:transparent;border:1px solid var(--line);border-radius:999px;padding:6px 14px;color:var(--ink);cursor:pointer;font:inherit;font-size:14px;transition:.15s}
 .ghost:hover{background:var(--chip)}
@@ -80,3 +82,12 @@ footer{padding:6px 18px calc(12px + env(safe-area-inset-bottom));background:line
 
 .run .tech{margin-top:6px;font-size:12.5px;color:var(--mut)}.run .tech summary{cursor:pointer}
 .mtag{margin-top:6px;font-size:11px;color:var(--mut);opacity:.7}
+
+.icon.on{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
+.icon.on:hover{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
+.planbox{max-width:640px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:12px 18px;box-shadow:var(--shadow);font-size:14.5px}
+.planbox .pt{font-weight:700;font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.planbox ol{margin:4px 0 2px;padding-left:22px}
+.planbox li{margin:3px 0;color:var(--ink)}
+.planbox li.done{color:var(--mut);text-decoration:line-through}
+.planbox li.cur{color:var(--accent);font-weight:600}
