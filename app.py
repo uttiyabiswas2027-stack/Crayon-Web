@@ -13,6 +13,7 @@ import memory
 import telegram_bot
 import discord_bot
 import twilio_wa
+import voice
 
 BASE = Path(__file__).parent
 MAX_MSG = 9000
@@ -37,6 +38,7 @@ app.include_router(keystore.router)
 app.include_router(memory.router)
 app.include_router(telegram_bot.router)
 app.include_router(twilio_wa.router)
+app.include_router(voice.router)
 keystore.load_into_env()
 if os.environ.get("NEON_DATABASE_URL"):
     try:

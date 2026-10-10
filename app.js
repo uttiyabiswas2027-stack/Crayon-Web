@@ -656,24 +656,64 @@
     } catch (_) { toast('Could not create a share link.'); }
   });
 
-  // ---- voice: speech input + spoken replies (browser-native, degrades gracefully) ----
-  let wantSpeak = false;
-  function speak(text) {
-    if (!window.speechSynthesis || !text) return;
+  // ---- voice: Gemini-backed TTS/STT + live conversation, browser fallback ----
+  let wantSpeak = false, ttsAudio = null;
+  async function speak(text) {
+    if (!text) return;
+    const clean = text.replace(/```[\s\S]*?(```|$)/g, ' ').replace(/[*_`#\[\]()>]/g, '').replace(/https?:\/\/\S+/g, 'link').slice(0, 1200);
+    try { ttsAudio && ttsAudio.pause(); } catch (_) {}
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch (_) {}
     try {
-      speechSynthesis.cancel();
-      const clean = text.replace(/```[\s\S]*?(```|$)/g, ' ').replace(/[*_`#\[\]()>]/g, '').replace(/https?:\/\/\S+/g, 'link').slice(0, 1200);
-      speechSynthesis.speak(new SpeechSynthesisUtterance(clean));
+      const r = await fetch('/api/tts', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: clean})});
+      if (r.ok) {
+        const a = new Audio(URL.createObjectURL(await r.blob()));
+        ttsAudio = a;
+        a.onended = () => { if (ttsAudio === a) ttsAudio = null; };
+        await a.play();
+        return;
+      }
+    } catch (_) {}
+    try {
+      if (window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance(clean));
     } catch (_) {}
   }
+  function stopSpeaking() {
+    try { ttsAudio && ttsAudio.pause(); ttsAudio = null; } catch (_) {}
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch (_) {}
+  }
+
+  // mic: record -> /api/stt (Gemini transcription), fallback to browser SpeechRecognition
+  const mic = $('#mic');
+  mic.classList.remove('hide');
+  let mr = null, mrChunks = [];
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SR) {
-    const mic = $('#mic');
-    mic.classList.remove('hide');
+  async function startGeminiMic() {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    mr = new MediaRecorder(stream);
+    mrChunks = [];
+    mr.ondataavailable = (e) => { if (e.data.size) mrChunks.push(e.data); };
+    mr.onstop = async () => {
+      mic.classList.remove('listening');
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(mrChunks, {type: mr.mimeType || 'audio/webm'});
+      try {
+        const r = await fetch('/api/stt', {method: 'POST', headers: {'Content-Type': blob.type || 'audio/webm'}, body: blob});
+        const j = await r.json();
+        const t = (j.text || '').trim();
+        if (t) { input.value = t; wantSpeak = true; ask(t); }
+        else toast('Heard nothing - try again.');
+      } catch (_) { toast('Transcription failed - try again.'); }
+    };
+    mr.start();
+    mic.classList.add('listening');
+    toast('Listening - tap the mic again when done.');
+  }
+  function startSrMic() {
+    if (!SR) { toast('Voice input is not available in this browser.'); return; }
     const rec = new SR();
     rec.lang = navigator.language || 'en-US';
     rec.interimResults = true;
-    let base = '';
+    let base = input.value;
     rec.onresult = (e) => {
       let t = '';
       for (const r of e.results) t += r[0].transcript;
@@ -686,45 +726,105 @@
       if (t) { wantSpeak = true; ask(t); }
     };
     rec.onerror = () => mic.classList.remove('listening');
-    mic.addEventListener('click', () => {
-      if (mic.classList.contains('listening')) { rec.stop(); return; }
-      try { base = input.value; mic.classList.add('listening'); rec.start(); } catch (_) {}
-    });
+    try { mic.classList.add('listening'); rec.start(); } catch (_) {}
   }
+  mic.addEventListener('click', () => {
+    if (mic.classList.contains('listening')) {
+      try { mr && mr.state !== 'inactive' ? mr.stop() : null; } catch (_) {}
+      mic.classList.remove('listening');
+      return;
+    }
+    if (navigator.mediaDevices && window.MediaRecorder) startGeminiMic().catch(() => startSrMic());
+    else startSrMic();
+  });
 
-  // ---- live voice mode: hands-free conversation loop ----
-  let live = false, liveRec = null;
+  // ---- live voice mode: Gemini Live when available, browser loop fallback ----
+  let live = false, liveRec = null, liveWs = null, liveCtx = null, liveNode = null, liveStream = null, nextPlay = 0;
   const liveBtn = $('#live');
-  if (SR) liveBtn.classList.remove('hide');
+  liveBtn.classList.remove('hide');
   function stopLive() {
     live = false; liveBtn.classList.remove('listening');
     try { liveRec && liveRec.stop(); } catch (_) {}
-    try { window.speechSynthesis && speechSynthesis.cancel(); } catch (_) {}
+    try { liveWs && liveWs.close(); liveWs = null; } catch (_) {}
+    try { liveNode && liveNode.disconnect(); liveNode = null; } catch (_) {}
+    try { liveStream && liveStream.getTracks().forEach((t) => t.stop()); liveStream = null; } catch (_) {}
+    stopSpeaking();
   }
-  function liveLoop() {
-    if (!live) return;
-    liveRec = new SR();
-    liveRec.lang = navigator.language || 'en-US';
-    liveRec.interimResults = false;
-    let got = '';
-    liveRec.onresult = (e) => {
-      try { speechSynthesis.cancel(); } catch (_) {}
-      got = e.results[e.results.length - 1][0].transcript;
+  function b64pcm(f32) {
+    const b = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) b[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
+    let bin = '';
+    const u8 = new Uint8Array(b.buffer);
+    for (let i = 0; i < u8.length; i += 4096) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 4096));
+    return btoa(bin);
+  }
+  function playPcm(b64) {
+    const bin = atob(b64);
+    const b = new Int16Array(bin.length / 2);
+    for (let i = 0; i < b.length; i++) b[i] = bin.charCodeAt(i * 2) | (bin.charCodeAt(i * 2 + 1) << 8);
+    const f = new Float32Array(b.length);
+    for (let i = 0; i < b.length; i++) f[i] = b[i] / 32768;
+    const buf = liveCtx.createBuffer(1, f.length, 24000);
+    buf.getChannelData(0).set(f);
+    const src = liveCtx.createBufferSource();
+    src.buffer = buf; src.connect(liveCtx.destination);
+    nextPlay = Math.max(nextPlay, liveCtx.currentTime);
+    src.start(nextPlay);
+    nextPlay += buf.duration;
+  }
+  async function startGeminiLive() {
+    liveCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
+    nextPlay = 0;
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    liveWs = new WebSocket(proto + '://' + location.host + '/ws/live');
+    liveWs.onerror = () => { if (live) { stopLive(); startSrLive(); } };
+    liveWs.onclose = () => { if (live) { stopLive(); startSrLive(); } };
+    liveWs.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      if (msg.error) { toast(msg.error); return; }
+      if (msg.interrupted) { try { liveCtx.close(); } catch (_) {} liveCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000}); nextPlay = 0; return; }
+      (msg.audio || []).forEach(playPcm);
     };
-    liveRec.onend = () => {
+    await new Promise((res, rej) => {
+      const to = setTimeout(() => rej(new Error('timeout')), 12000);
+      liveWs.addEventListener('message', function h(ev) {
+        try { if (JSON.parse(ev.data).ready) { clearTimeout(to); liveWs.removeEventListener('message', h); res(); } } catch (_) {}
+      });
+    });
+    liveStream = await navigator.mediaDevices.getUserMedia({audio: true});
+    const src = liveCtx.createMediaStreamSource(liveStream);
+    liveNode = liveCtx.createScriptProcessor(4096, 1, 1);
+    liveNode.onaudioprocess = (e) => {
+      if (liveWs && liveWs.readyState === 1) liveWs.send(JSON.stringify({audio: b64pcm(e.inputBuffer.getChannelData(0))}));
+    };
+    src.connect(liveNode); liveNode.connect(liveCtx.destination);
+    toast('Gemini Live on - just talk. Tap the same button to stop.');
+  }
+  function startSrLive() {
+    if (!SR) { toast('Live voice is not available in this browser.'); live = false; return; }
+    toast('Live mode on (basic) - just talk.');
+    (function loop() {
       if (!live) return;
-      const t = got.trim();
-      if (t && !busy) { wantSpeak = true; ask(t).finally(() => { if (live) setTimeout(liveLoop, 600); }); }
-      else setTimeout(liveLoop, 400);
-    };
-    liveRec.onerror = () => { if (live) setTimeout(liveLoop, 900); };
-    try { liveRec.start(); } catch (_) { setTimeout(liveLoop, 900); }
+      liveRec = new SR();
+      liveRec.lang = navigator.language || 'en-US';
+      liveRec.interimResults = false;
+      let got = '';
+      liveRec.onresult = (e) => { stopSpeaking(); got = e.results[e.results.length - 1][0].transcript; };
+      liveRec.onend = () => {
+        if (!live) return;
+        const t = got.trim();
+        if (t && !busy) { wantSpeak = true; ask(t).finally(() => { if (live) setTimeout(loop, 600); }); }
+        else setTimeout(loop, 400);
+      };
+      liveRec.onerror = () => { if (live) setTimeout(loop, 900); };
+      try { liveRec.start(); } catch (_) { setTimeout(loop, 900); }
+    })();
   }
-  if (SR) liveBtn.addEventListener('click', () => {
+  liveBtn.addEventListener('click', () => {
     if (live) { stopLive(); return; }
     live = true; liveBtn.classList.add('listening');
-    toast('Live mode on - just talk. Tap the same button to stop.');
-    liveLoop();
+    startGeminiLive().catch(() => { if (live) { stopLive(); live = true; liveBtn.classList.add('listening'); startSrLive(); } });
   });
 
   bootChats(); loadMe(); send.disabled = true; input.focus();
