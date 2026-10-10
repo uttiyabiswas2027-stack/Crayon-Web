@@ -13,6 +13,13 @@ router = APIRouter()
 BASE = "https://waba-sandbox.360dialog.io"
 PUBLIC = os.environ.get("PUBLIC_URL", "https://crayon-web.onrender.com").rstrip("/")
 chats: "OrderedDict[str, list]" = OrderedDict()
+_tasks = set()
+
+
+def fire(coro):
+    t = asyncio.create_task(coro)
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
 seen: "OrderedDict[str, float]" = OrderedDict()
 
 
@@ -90,6 +97,27 @@ async def handle(wa_id: str, text: str):
         await send(wa_id, "Crayon hit a snag. Try again in a moment.")
 
 
+@router.get("/setup/d360-status")
+async def d360_status(req: Request):
+    tok = os.environ.get("ADMIN_TOKEN", "")
+    if not tok or not hmac.compare_digest(str(req.headers.get("x-admin-token", "")), tok):
+        return JSONResponse({"error": "no"}, status_code=403)
+    if not enabled():
+        return JSONResponse({"error": "D360_API_KEY not set"}, status_code=503)
+    out = {"key_len": len(key())}
+    async with httpx.AsyncClient(timeout=20) as c:
+        g = await c.get(BASE + "/v1/configs/webhook", headers={"D360-API-KEY": key()})
+        out["webhook_get"] = {"status": g.status_code, "body": g.text[:200]}
+        to = str(req.query_params.get("to", "")).strip()
+        if to:
+            r = await c.post(BASE + "/v1/messages",
+                             headers={"D360-API-KEY": key(), "Content-Type": "application/json"},
+                             json={"recipient_type": "individual", "to": to,
+                                   "type": "text", "text": {"body": "Crayon test: WhatsApp send path works."}})
+            out["send"] = {"status": r.status_code, "body": r.text[:300]}
+    return JSONResponse(out)
+
+
 @router.post("/whatsapp/d360")
 async def webhook(req: Request):
     if not enabled():
@@ -121,7 +149,7 @@ async def webhook(req: Request):
                     continue
                 lim = A.limited("wa360:%s" % frm)
                 if lim:
-                    asyncio.create_task(send(frm, lim))
+                    fire(send(frm, lim))
                     continue
-                asyncio.create_task(handle(frm, text[:4000]))
+                fire(handle(frm, text[:4000]))
     return JSONResponse({"ok": True})
