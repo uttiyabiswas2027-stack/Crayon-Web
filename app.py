@@ -157,6 +157,8 @@ async def chat(req: Request):
         return JSONResponse({"error": "bad request"}, status_code=400)
     text = str(body.get("message", "")).strip()
     sid = str(body.get("session_id") or "")[:64] or uuid.uuid4().hex
+    vid0, _nv0 = memory.identity(req)
+    skey = vid0 + ":" + sid  # cache is per-visitor: a sid alone must never cross visitors
     if not text:
         return JSONResponse({"error": "empty message"}, status_code=400)
     if len(text) > MAX_MSG:
@@ -174,13 +176,14 @@ async def chat(req: Request):
         mail_on = False
     agent_on = bool(body.get("agent"))
     vid, new_vid = memory.identity(req)
-    hist = sessions.get(sid)
+    hist = sessions.get(skey)
     if hist is None:
         hist = await asyncio.to_thread(memory.load_context, vid)
-    sessions[sid] = hist
-    sessions.move_to_end(sid)
+    sessions[skey] = hist
+    sessions.move_to_end(skey)
     while len(sessions) > MAX_SESSIONS:
         sessions.popitem(last=False)
+    assert skey.startswith(vid + ":"), "visitor/session key mismatch"
     asyncio.create_task(asyncio.to_thread(memory.event, vid, "agent" if agent_on else "chat"))
 
     async def gen():
@@ -544,7 +547,7 @@ async def reset(req: Request):
         sid = str((await req.json()).get("session_id", ""))
     except Exception:
         sid = ""
-    sessions.pop(sid, None)
     vid, _ = memory.identity(req)
+    sessions.pop(vid + ":" + sid, None)
     await asyncio.to_thread(memory.boundary, vid)
     return {"ok": True}
