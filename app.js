@@ -695,6 +695,7 @@
     mr.onstop = async () => {
       mic.classList.remove('listening');
       stream.getTracks().forEach((t) => t.stop());
+      toast('Transcribing...');
       const blob = new Blob(mrChunks, {type: mr.mimeType || 'audio/webm'});
       try {
         const r = await fetch('/api/stt', {method: 'POST', headers: {'Content-Type': blob.type || 'audio/webm'}, body: blob});
@@ -739,7 +740,12 @@
   });
 
   // ---- live voice mode: Gemini Live when available, browser loop fallback ----
-  let live = false, liveRec = null, liveWs = null, liveCtx = null, liveNode = null, liveStream = null, nextPlay = 0;
+  let live = false, liveRec = null, liveWs = null, liveCtx = null, liveNode = null, liveStream = null, nextPlay = 0, liveSrcs = [];
+  function makeCtx(rate) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try { return new AC({sampleRate: rate}); } catch (_) { try { return new AC(); } catch (_) { return null; } }
+  }
   const liveBtn = $('#live');
   liveBtn.classList.remove('hide');
   function stopLive() {
@@ -748,6 +754,10 @@
     try { liveWs && liveWs.close(); liveWs = null; } catch (_) {}
     try { liveNode && liveNode.disconnect(); liveNode = null; } catch (_) {}
     try { liveStream && liveStream.getTracks().forEach((t) => t.stop()); liveStream = null; } catch (_) {}
+    liveSrcs.forEach((x) => { try { x.stop(); } catch (_) {} });
+    liveSrcs = [];
+    try { liveCtx && liveCtx.close(); } catch (_) {}
+    liveCtx = null;
     stopSpeaking();
   }
   function b64pcm(f32) {
@@ -768,12 +778,16 @@
     buf.getChannelData(0).set(f);
     const src = liveCtx.createBufferSource();
     src.buffer = buf; src.connect(liveCtx.destination);
+    liveSrcs.push(src);
+    src.onended = () => { liveSrcs = liveSrcs.filter((x) => x !== src); };
     nextPlay = Math.max(nextPlay, liveCtx.currentTime);
     src.start(nextPlay);
     nextPlay += buf.duration;
   }
   async function startGeminiLive() {
-    liveCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
+    if (!liveCtx) liveCtx = makeCtx(16000);
+    if (!liveCtx) throw new Error('no audio context');
+    try { await liveCtx.resume(); } catch (_) {}
     nextPlay = 0;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     liveWs = new WebSocket(proto + '://' + location.host + '/ws/live');
@@ -783,7 +797,7 @@
       let msg;
       try { msg = JSON.parse(ev.data); } catch (_) { return; }
       if (msg.error) { toast(msg.error); return; }
-      if (msg.interrupted) { try { liveCtx.close(); } catch (_) {} liveCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000}); nextPlay = 0; return; }
+      if (msg.interrupted) { liveSrcs.forEach((x) => { try { x.stop(); } catch (_) {} }); liveSrcs = []; nextPlay = 0; return; }
       (msg.audio || []).forEach(playPcm);
     };
     await new Promise((res, rej) => {
