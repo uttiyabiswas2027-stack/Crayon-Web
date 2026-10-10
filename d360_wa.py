@@ -37,7 +37,7 @@ async def send(to: str, text: str):
         for i in range(0, len(text) or 1, 1500):
             r = await c.post(BASE + "/v1/messages",
                              headers={"D360-API-KEY": key(), "Content-Type": "application/json"},
-                             json={"recipient_type": "individual", dest: to,
+                             json={"messaging_product": "whatsapp", "recipient_type": "individual", dest: to,
                                    "type": "text", "text": {"body": text[i:i + 1500]}})
             if r.status_code >= 400:
                 print("360dialog send failed:", r.status_code, r.text[:200])
@@ -112,7 +112,7 @@ async def d360_status(req: Request):
         if to:
             r = await c.post(BASE + "/v1/messages",
                              headers={"D360-API-KEY": key(), "Content-Type": "application/json"},
-                             json={"recipient_type": "individual", "to": to,
+                             json={"messaging_product": "whatsapp", "recipient_type": "individual", "to": to,
                                    "type": "text", "text": {"body": "Crayon test: WhatsApp send path works."}})
             out["send"] = {"status": r.status_code, "body": r.text[:300]}
     return JSONResponse(out)
