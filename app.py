@@ -295,6 +295,24 @@ async def search(req: Request):
         return {"results": hit[1]}
     try:
         fq = q
+        if focus == "deep":
+            from concurrent.futures import ThreadPoolExecutor
+            variants = [q, q + " in-depth analysis", q + " latest developments"]
+            with ThreadPoolExecutor(3) as ex:
+                parts = list(ex.map(_do_search, variants))
+            seen2, merged, anyok = set(), [], False
+            for res2, ok2 in parts:
+                anyok = anyok or ok2
+                for r2 in res2:
+                    if r2["url"] not in seen2:
+                        seen2.add(r2["url"])
+                        merged.append(r2)
+            res, ok = merged[:15], anyok
+            if ok and len(res) >= 3:
+                if len(_scache) > 500:
+                    _scache.clear()
+                _scache[q.lower()] = (now, res)
+            return {"results": res}
         if focus == "academic":
             fq = q + " (site:edu OR site:gov OR site:ac.in OR site:nature.com OR site:sciencedirect.com)"
         elif focus == "social":

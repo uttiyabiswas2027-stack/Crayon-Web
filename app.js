@@ -413,6 +413,7 @@
         } catch (_) { err = 'Search failed.'; }
         finishSearch(sc, items, err);
         msg = '[Search results for: ' + q + ']\n' + (items.length ? items.map((x, i) => (i + 1) + '. ' + x.title + (x.date ? ' (' + x.date + ')' : '') + '\n   ' + x.url + '\n   ' + x.snippet).join('\n') : '(no results' + (err ? ': ' + err : '') + ')');
+        if ((document.querySelector('#focus') || {}).value === 'deep') msg += '\n[Deep research mode: synthesize ALL sources into a structured report with ## headings, cite sources inline as [n], end with a Sources list.]';
         continue;
       }
       const ig = acc.match(/```image-gen\n([\s\S]*?)```/);
