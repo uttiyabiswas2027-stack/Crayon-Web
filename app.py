@@ -275,7 +275,9 @@ async def search(req: Request):
     if int(req.headers.get("content-length") or 0) > 2000:
         return JSONResponse({"error": "Request too large."}, status_code=413)
     try:
-        q = str((await req.json()).get("q", "")).strip()[:200]
+        body = await req.json()
+        q = str(body.get("q", "")).strip()[:200]
+        focus = str(body.get("focus", "")).strip().lower()[:12]
     except Exception:
         return JSONResponse({"error": "bad request"}, status_code=400)
     if not q:
@@ -291,7 +293,14 @@ async def search(req: Request):
     if hit and now - hit[0] < 300:
         return {"results": hit[1]}
     try:
-        res, ok = await asyncio.wait_for(asyncio.to_thread(_do_search, q), timeout=30)
+        fq = q
+        if focus == "academic":
+            fq = q + " (site:edu OR site:gov OR site:ac.in OR site:nature.com OR site:sciencedirect.com)"
+        elif focus == "social":
+            fq = q + " (site:reddit.com OR site:quora.com OR site:x.com)"
+        elif focus == "video":
+            fq = q + " site:youtube.com"
+        res, ok = await asyncio.wait_for(asyncio.to_thread(_do_search, fq), timeout=30)
     except Exception:
         return JSONResponse({"error": "Search is unavailable right now."}, status_code=503)
     if ok and len(res) >= 3:
@@ -391,6 +400,99 @@ async def fetch_page(req: Request):
         _fcache.clear()
     _fcache[url] = (time.time(), res)
     return res
+
+
+WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog", 48: "Icy fog",
+       51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle", 61: "Light rain", 63: "Rain", 65: "Heavy rain",
+       66: "Freezing rain", 67: "Heavy freezing rain", 71: "Light snow", 73: "Snow", 75: "Heavy snow",
+       77: "Snow grains", 80: "Light showers", 81: "Showers", 82: "Heavy showers", 85: "Snow showers",
+       86: "Heavy snow showers", 95: "Thunderstorm", 96: "Storm with hail", 99: "Storm with heavy hail"}
+
+
+@app.get("/api/weather")
+async def weather(req: Request, q: str = ""):
+    q = q.strip()[:80]
+    if not q:
+        return JSONResponse({"error": "empty place"}, status_code=400)
+    msg = limited(client_ip(req))
+    if msg:
+        return JSONResponse({"error": msg}, status_code=429)
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+            g = (await c.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": q, "count": 1, "language": "en"})).json()
+            if not g.get("results"):
+                return JSONResponse({"error": "Place not found."}, status_code=404)
+            p = g["results"][0]
+            w = (await c.get("https://api.open-meteo.com/v1/forecast",
+                             params={"latitude": p["latitude"], "longitude": p["longitude"],
+                                     "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m",
+                                     "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+                                     "timezone": "auto", "forecast_days": 3})).json()
+        cur, d = w.get("current", {}), w.get("daily", {})
+        days = []
+        for i in range(min(3, len(d.get("time", [])))):
+            days.append({"date": d["time"][i], "max": d["temperature_2m_max"][i], "min": d["temperature_2m_min"][i],
+                         "rain": (d.get("precipitation_probability_max") or [None] * 3)[i]})
+        return {"place": p.get("name", q) + (", " + p["country"] if p.get("country") else ""),
+                "temp": cur.get("temperature_2m"), "feels": cur.get("apparent_temperature"),
+                "humidity": cur.get("relative_humidity_2m"), "wind": cur.get("wind_speed_10m"),
+                "cond": WMO.get(cur.get("weather_code"), "Unknown"), "days": days, "source": "open-meteo.com"}
+    except Exception as e:
+        print("weather:", type(e).__name__)
+        return JSONResponse({"error": "Weather is unavailable right now."}, status_code=503)
+
+
+@app.get("/api/fx")
+async def fx(req: Request, pair: str = ""):
+    import re as _re
+    m = _re.findall(r"[A-Za-z]{3}", pair.upper())[:2]
+    if len(m) != 2:
+        return JSONResponse({"error": "Give a pair like USD to INR."}, status_code=400)
+    base, to = m
+    msg = limited(client_ip(req))
+    if msg:
+        return JSONResponse({"error": msg}, status_code=429)
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            j = (await c.get(f"https://open.er-api.com/v6/latest/{base}")).json()
+        if j.get("result") != "success" or to not in j.get("rates", {}):
+            return JSONResponse({"error": "Unknown currency pair."}, status_code=404)
+        return {"base": base, "to": to, "rate": j["rates"][to], "date": j.get("time_last_update_utc", "")[:16],
+                "source": "open.er-api.com"}
+    except Exception as e:
+        print("fx:", type(e).__name__)
+        return JSONResponse({"error": "Rates are unavailable right now."}, status_code=503)
+
+
+@app.get("/api/stock")
+async def stock(req: Request, sym: str = ""):
+    import re as _re
+    sym = _re.sub(r"[^A-Za-z0-9.^\-]", "", sym.strip().upper())[:12]
+    if not sym:
+        return JSONResponse({"error": "empty ticker"}, status_code=400)
+    msg = limited(client_ip(req))
+    if msg:
+        return JSONResponse({"error": msg}, status_code=429)
+    try:
+        import datetime as _dt
+        async with httpx.AsyncClient(timeout=10, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}) as c:
+            j = (await c.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}", params={"interval": "1d", "range": "1d"})).json()
+        res = (j.get("chart") or {}).get("result") or []
+        if not res:
+            return JSONResponse({"error": "Unknown ticker."}, status_code=404)
+        meta = res[0].get("meta", {})
+        price = meta.get("regularMarketPrice")
+        if price is None:
+            return JSONResponse({"error": "Unknown ticker."}, status_code=404)
+        ts = meta.get("regularMarketTime")
+        when = _dt.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M UTC") if ts else ""
+        return {"symbol": meta.get("symbol", sym), "name": meta.get("shortName") or meta.get("longName") or "",
+                "price": price, "prev": meta.get("chartPreviousClose"), "currency": meta.get("currency", ""),
+                "exchange": meta.get("fullExchangeName") or meta.get("exchangeName") or "",
+                "date": when, "source": "yahoo finance"}
+    except Exception as e:
+        print("stock:", type(e).__name__)
+        return JSONResponse({"error": "Quotes are unavailable right now."}, status_code=503)
 
 
 @app.get("/api/image")
