@@ -729,13 +729,22 @@
     rec.onerror = () => mic.classList.remove('listening');
     try { mic.classList.add('listening'); rec.start(); } catch (_) {}
   }
+  function micError(e) {
+    if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError' || e.name === 'PermissionDeniedError'))
+      toast('Microphone is blocked. Allow mic access for this site in your browser settings, then tap again.');
+    else if (e && e.name === 'NotFoundError') toast('No microphone found on this device.');
+    else if (e && e.name === 'NotReadableError') toast('Microphone is busy in another app - close it and retry.');
+    else return false;
+    return true;
+  }
   mic.addEventListener('click', () => {
     if (mic.classList.contains('listening')) {
       try { mr && mr.state !== 'inactive' ? mr.stop() : null; } catch (_) {}
       mic.classList.remove('listening');
       return;
     }
-    if (navigator.mediaDevices && window.MediaRecorder) startGeminiMic().catch(() => startSrMic());
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { toast('Voice input needs a secure (https) browser with mic support.'); return; }
+    if (window.MediaRecorder) startGeminiMic().catch((e) => { if (!micError(e)) startSrMic(); });
     else startSrMic();
   });
 
@@ -838,7 +847,10 @@
   liveBtn.addEventListener('click', () => {
     if (live) { stopLive(); return; }
     live = true; liveBtn.classList.add('listening');
-    startGeminiLive().catch(() => { if (live) { stopLive(); live = true; liveBtn.classList.add('listening'); startSrLive(); } });
+    startGeminiLive().catch((e) => {
+      if (micError(e)) { stopLive(); return; }
+      if (live) { stopLive(); live = true; liveBtn.classList.add('listening'); startSrLive(); }
+    });
   });
 
   bootChats(); loadMe(); send.disabled = true; input.focus();
