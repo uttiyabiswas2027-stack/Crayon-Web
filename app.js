@@ -688,8 +688,11 @@
   let mr = null, mrChunks = [];
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   async function startGeminiMic() {
-    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-    mr = new MediaRecorder(stream);
+    const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true}});
+    const mtypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+    let mt = '';
+    for (const t of mtypes) { try { if (MediaRecorder.isTypeSupported(t)) { mt = t; break; } } catch (_) {} }
+    mr = mt ? new MediaRecorder(stream, {mimeType: mt}) : new MediaRecorder(stream);
     mrChunks = [];
     mr.ondataavailable = (e) => { if (e.data.size) mrChunks.push(e.data); };
     mr.onstop = async () => {
@@ -705,7 +708,7 @@
         else toast('Heard nothing - try again.');
       } catch (_) { toast('Transcription failed - try again.'); }
     };
-    mr.start();
+    mr.start(250);
     mic.classList.add('listening');
     toast('Listening - tap the mic again when done.');
   }
@@ -753,7 +756,7 @@
   function makeCtx(rate) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
-    try { return new AC({sampleRate: rate}); } catch (_) { try { return new AC(); } catch (_) { return null; } }
+    try { return rate ? new AC({sampleRate: rate}) : new AC(); } catch (_) { try { return new AC(); } catch (_) { return null; } }
   }
   const liveBtn = $('#live');
   liveBtn.classList.remove('hide');
@@ -768,6 +771,15 @@
     try { liveCtx && liveCtx.close(); } catch (_) {}
     liveCtx = null;
     stopSpeaking();
+  }
+  function downsample(f32, from, to) {
+    if (!from || from === to) return f32;
+    const ratio = from / to, out = new Float32Array(Math.floor(f32.length / ratio));
+    for (let i = 0; i < out.length; i++) {
+      const pos = i * ratio, j = Math.floor(pos), f = pos - j;
+      out[i] = (j + 1 < f32.length) ? f32[j] * (1 - f) + f32[j + 1] * f : f32[j];
+    }
+    return out;
   }
   function b64pcm(f32) {
     const b = new Int16Array(f32.length);
@@ -794,9 +806,14 @@
     nextPlay += buf.duration;
   }
   async function startGeminiLive() {
-    if (!liveCtx) liveCtx = makeCtx(16000);
+    if (!liveCtx) liveCtx = makeCtx();
     if (!liveCtx) throw new Error('no audio context');
     try { await liveCtx.resume(); } catch (_) {}
+    if (liveCtx.state !== 'running') {
+      stopLive();
+      toast('Audio is blocked - tap the live button again.');
+      return;
+    }
     nextPlay = 0;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     liveWs = new WebSocket(proto + '://' + location.host + '/ws/live');
@@ -815,11 +832,12 @@
         try { if (JSON.parse(ev.data).ready) { clearTimeout(to); liveWs.removeEventListener('message', h); res(); } } catch (_) {}
       });
     });
-    liveStream = await navigator.mediaDevices.getUserMedia({audio: true});
+    liveStream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, channelCount: 1}});
     const src = liveCtx.createMediaStreamSource(liveStream);
     liveNode = liveCtx.createScriptProcessor(4096, 1, 1);
+    const inRate = liveCtx.sampleRate;
     liveNode.onaudioprocess = (e) => {
-      if (liveWs && liveWs.readyState === 1) liveWs.send(JSON.stringify({audio: b64pcm(e.inputBuffer.getChannelData(0))}));
+      if (liveWs && liveWs.readyState === 1) liveWs.send(JSON.stringify({audio: b64pcm(downsample(e.inputBuffer.getChannelData(0), inRate, 16000))}));
     };
     src.connect(liveNode); liveNode.connect(liveCtx.destination);
     toast('Gemini Live on - just talk. Tap the same button to stop.');
