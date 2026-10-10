@@ -4,6 +4,7 @@ All routes use the existing GEMINI_API_KEY - Google AI Studio's free tier
 covers TTS, transcription and the Live API (ai.google.dev/gemini-api/docs/pricing).
 No new accounts, no paid dependency.
 """
+import asyncio
 import base64
 import json
 import os
@@ -173,7 +174,8 @@ async def live(ws: WebSocket):
             await asyncio.gather(to_gemini(), to_client())
     except WebSocketDisconnect:
         pass
-    except Exception:
+    except Exception as e:
+        print("live proxy error:", type(e).__name__, str(e)[:200])
         try:
             await ws.send_text(json.dumps({"error": "Live voice connection dropped."}))
             await ws.close()
