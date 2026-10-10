@@ -2,7 +2,7 @@
 Dormant unless D360_API_KEY is set (key comes from sending START to +551146733492 on WhatsApp).
 Optional D360_HOOK_SECRET: when set, the webhook URL must be registered with ?s=<secret> and
 requests without it are ignored - stops strangers from driving the bot through the public URL."""
-import asyncio, os, time
+import asyncio, hmac, os, time
 from collections import OrderedDict
 import httpx
 from fastapi import APIRouter, Request
@@ -11,6 +11,7 @@ from twilio_wa import think, clean
 
 router = APIRouter()
 BASE = "https://waba-sandbox.360dialog.io"
+PUBLIC = os.environ.get("PUBLIC_URL", "https://crayon-web.onrender.com").rstrip("/")
 chats: "OrderedDict[str, list]" = OrderedDict()
 seen: "OrderedDict[str, float]" = OrderedDict()
 
@@ -24,14 +25,33 @@ def enabled() -> bool:
 
 
 async def send(to: str, text: str):
+    dest = "to" if to.isdigit() else "recipient"  # BSUID accounts use "recipient"
     async with httpx.AsyncClient(timeout=20) as c:
         for i in range(0, len(text) or 1, 1500):
             r = await c.post(BASE + "/v1/messages",
                              headers={"D360-API-KEY": key(), "Content-Type": "application/json"},
-                             json={"recipient_type": "individual", "to": to,
+                             json={"recipient_type": "individual", dest: to,
                                    "type": "text", "text": {"body": text[i:i + 1500]}})
             if r.status_code >= 400:
                 print("360dialog send failed:", r.status_code, r.text[:200])
+
+
+@router.post("/setup/d360-webhook")
+async def register(req: Request):
+    tok = os.environ.get("ADMIN_TOKEN", "")
+    if not tok or not hmac.compare_digest(str(req.headers.get("x-admin-token", "")), tok):
+        return JSONResponse({"error": "no"}, status_code=403)
+    if not enabled():
+        return JSONResponse({"error": "D360_API_KEY not set"}, status_code=503)
+    url = PUBLIC + "/whatsapp/d360"
+    secret = os.environ.get("D360_HOOK_SECRET", "").strip()
+    if secret:
+        url += "?s=" + secret
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(BASE + "/v1/configs/webhook",
+                         headers={"D360-API-KEY": key(), "Content-Type": "application/json"},
+                         json={"url": url})
+    return JSONResponse({"status": r.status_code, "reply": r.text[:300], "webhook": url})
 
 
 async def handle(wa_id: str, text: str):
