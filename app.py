@@ -10,6 +10,7 @@ import llm
 import gmail_auth
 import keystore
 import memory
+import tasks
 import telegram_bot
 import discord_bot
 import twilio_wa
@@ -168,6 +169,9 @@ async def chat(req: Request):
     msg = limited(client_ip(req))
     if msg:
         return JSONResponse({"error": msg}, status_code=429)
+
+    if text == '/todo' or text.startswith('/todo '):
+        return await asyncio.to_thread(tasks.response, req, text, body.get('request_id'), vid, new_vid)
 
     if active["n"] >= MAX_STREAMS:
         return JSONResponse({"error": "Crayon is busy right now. Try again in a few seconds."}, status_code=503)
