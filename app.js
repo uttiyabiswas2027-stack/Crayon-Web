@@ -194,10 +194,10 @@
   }
   function stopThink(bub) { if (bub && bub._think) { clearInterval(bub._think); bub._think = 0; } }
   async function stream(text, bub) {
-    let acc = '', raf = 0, modelTag = '';
+    let acc = '', raf = 0, modelTag = '', taskResult = false;
     try {
       ctl = new AbortController();
-      const r = await fetch('/api/chat', {signal: ctl.signal, method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({session_id: sid, message: text, mail: signedIn, agent: agentMode, tz: (Intl.DateTimeFormat().resolvedOptions().timeZone || '')})});
+      const r = await fetch('/api/chat', {signal: ctl.signal, method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'crayon'}, body: JSON.stringify({request_id: (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)), session_id: sid, message: text, mail: signedIn, agent: agentMode, tz: (Intl.DateTimeFormat().resolvedOptions().timeZone || '')})});
       if (!r.ok) { const j = await r.json().catch(() => ({})); bub.parentElement.classList.add('err'); bub.textContent = j.error || 'Something went wrong.'; return null; }
       const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
       for (;;) {
@@ -210,13 +210,15 @@
           const d = line.slice(5).trim(); if (d === '[DONE]') continue;
           try {
             const j = JSON.parse(d);
-            if (j.m) { modelTag = j.m; } if (j.t) { stopThink(bub); acc += j.t; if (!raf) raf = requestAnimationFrame(() => { raf = 0; bub.innerHTML = md(acc); stick(); }); }
+            if (j.task_result) taskResult = true;
+            if (j.m) { modelTag = j.m; } if (j.t) { stopThink(bub); acc += j.t; if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (taskResult) { bub.textContent = acc; bub.style.whiteSpace = 'pre-wrap'; } else bub.innerHTML = md(acc); stick(); }); }
             if (j.err) { bub.parentElement.classList.add('err'); bub.textContent = j.err; return null; }
           } catch (_) {}
         }
       }
-    } catch (e) { stopThink(bub); if (stopped) { return null; } bub.parentElement.classList.add('err'); bub.textContent = 'Connection problem. Please try again.'; return null; }
+    } catch (e) { stopThink(bub); if (stopped) { return null; } bub.parentElement.classList.add('err'); bub.textContent = text.startsWith('/todo ') ? 'Task status is unverified after a connection problem. Use /todo list before adding again.' : 'Connection problem. Please try again.'; return null; }
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    if (taskResult) { bub.textContent = acc; bub.style.whiteSpace = 'pre-wrap'; stick(); return null; }
     bub.innerHTML = md(acc);
     if (modelTag && acc) { const t = document.createElement('div'); t.className = 'mtag'; t.textContent = 'via ' + modelTag; bub.appendChild(t); }
     stick();
@@ -283,6 +285,7 @@
   async function ask(raw) {
     const typed = raw.trim();
     if (busy || (!typed && !pending.length)) return;
+    if ((typed === '/todo' || typed.startsWith('/todo ')) && pending.length) { alert('Send task commands without attachments. Your files are still attached.'); return; }
     hero.classList.add('hide');
     const names = pending.slice(); pending = []; renderPending();
     let text = typed || 'Here are my files.';
@@ -566,9 +569,12 @@
     if (chatList.length) openChat(chatList[0].sid);
   }
   const forgetHandler = async () => {
-    if (!confirm('Delete everything Crayon remembers about you? This wipes your saved chats and cannot be undone.')) return;
-    try { await fetch('/api/forget', {method: 'POST', headers: XH}); } catch (_) {}
-    location.href = '/';
+    if (!confirm('Delete saved chats and tasks for this identity? Share links and connected accounts are not removed. This cannot be undone.')) return;
+    try {
+      const r = await fetch('/api/forget', {method: 'POST', headers: XH});
+      if (!r.ok) throw new Error();
+      location.href = '/';
+    } catch (_) { alert('Could not verify deletion. Please try again.'); }
   };
   $('#forget').addEventListener('click', forgetHandler);
   const f2 = $('#forget2'); if (f2) f2.addEventListener('click', forgetHandler);

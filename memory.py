@@ -239,6 +239,8 @@ def signin_cb(req: Request, code: str = "", state: str = "", error: str = ""):
            "ON CONFLICT (vid) DO UPDATE SET last_seen=excluded.last_seen, gsub=excluded.gsub, name=excluded.name, email=excluded.email, picture=excluded.picture",
            (canonical, now, now, sub, name, email, picture))
         if canonical != cur:
+            import tasks
+            tasks.merge(cur, canonical)
             db("UPDATE cw_mem SET vid = %s WHERE vid = %s", (canonical, cur))
             db("DELETE FROM cw_visitors WHERE vid = %s AND gsub IS NULL", (cur,))
         tok = secrets.token_urlsafe(32)
@@ -292,6 +294,8 @@ def history(req: Request):
 
 def forget_vid(vid: str):
     try:
+        import tasks
+        tasks.erase(vid)
         db("DELETE FROM cw_mem WHERE vid = %s", (vid,))
         db("DELETE FROM cw_cmsgs WHERE vid = %s", (vid,))
         db("DELETE FROM cw_chats WHERE vid = %s", (vid,))
@@ -332,12 +336,19 @@ def chat_delete(req: Request, sid: str):
 def forget(req: Request):
     if req.headers.get("x-requested-with") != "crayon":
         return JSONResponse({"error": "bad request"}, status_code=403)
+    if not on():
+        return JSONResponse({"error": "Erasure is unavailable while storage is disabled. Nothing has been verified deleted."}, status_code=503)
     vid, new = identity(req)
     if on():
         try:
+            import tasks
+            tasks.erase(vid)
             db("DELETE FROM cw_mem WHERE vid = %s", (vid,))
+            db("DELETE FROM cw_cmsgs WHERE vid = %s", (vid,))
+            db("DELETE FROM cw_chats WHERE vid = %s", (vid,))
         except Exception as e:
             print("mem forget:", type(e).__name__)
+            return JSONResponse({"error": "Could not verify erasure. Please try again."}, status_code=503)
     r = JSONResponse({"ok": True})
     if new:
         set_vid_cookie(r, vid)
